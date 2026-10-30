@@ -214,7 +214,7 @@ export default function ClientFilePage() {
 
         <div style={{ marginTop: "0.5rem", direction: "ltr", textAlign: "right" }}>
           السعر: {price.toLocaleString("ar-DZ")} د.ج · المصاريف: {expenses.toLocaleString("ar-DZ")} د.ج ·
-          الإجمالي: {margin.toLocaleString("ar-DZ")} د.ج
+          هامش الربح الإجمالي: {margin.toLocaleString("ar-DZ")} د.ج
         </div>
 
         {row.service_type === "visa" && visa && (
@@ -291,7 +291,7 @@ export default function ClientFilePage() {
         <div>إجمالي الأسعار: {linked.reduce((s, r) => s + Number(r.agreed_price_dzd ?? 0), 0).toLocaleString("ar-DZ")} د.ج</div>
         <div>إجمالي المصاريف: {linked.reduce((s, r) => s + (expenseByRequest[r.id] ?? 0), 0).toLocaleString("ar-DZ")} د.ج</div>
         <div>
-          الصافي: {(
+          هامش الربح الإجمالي للملف: {(
             linked.reduce((s, r) => s + Number(r.agreed_price_dzd ?? 0), 0) -
             linked.reduce((s, r) => s + (expenseByRequest[r.id] ?? 0), 0)
           ).toLocaleString("ar-DZ")} د.ج
