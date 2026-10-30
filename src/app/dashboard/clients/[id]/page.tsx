@@ -80,6 +80,7 @@ export default function ClientFilePage() {
         .from("service_requests")
         .select("id, reference, service_type, status, created_at, contact_name, contact_phone")
         .eq("client_id", clientId)
+        .is("archived_at", null)
         .order("created_at", { ascending: false });
 
       // Website requests with the same phone that are not linked yet
@@ -87,6 +88,7 @@ export default function ClientFilePage() {
         .from("service_requests")
         .select("id, reference, service_type, status, created_at, contact_name, contact_phone")
         .is("client_id", null)
+        .is("archived_at", null)
         .eq("contact_phone", clientRow.phone)
         .order("created_at", { ascending: false });
 
