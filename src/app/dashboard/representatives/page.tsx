@@ -10,6 +10,7 @@ type Representative = {
   agency_id: string;
   full_name: string;
   phone: string | null;
+  is_active: boolean;
 };
 
 // Converts a local Algerian number (0XXXXXXXXX) or 00-prefixed number to +213 format.
@@ -35,7 +36,7 @@ export default function RepresentativesPage() {
       supabase.from("agencies").select("id, name").order("name", { ascending: true }),
       supabase
         .from("agency_representatives")
-        .select("id, agency_id, full_name, phone")
+        .select("id, agency_id, full_name, phone, is_active")
         .order("full_name", { ascending: true }),
     ]);
 
@@ -97,6 +98,21 @@ export default function RepresentativesPage() {
     setFullName("");
     setPhone("");
     setMessage("تمت إضافة الممثل.");
+    loadAll();
+  }
+
+  async function toggleActive(rep: Representative) {
+    setMessage(null);
+
+    const { error } = await supabase
+      .from("agency_representatives")
+      .update({ is_active: !rep.is_active })
+      .eq("id", rep.id);
+
+    if (error) {
+      setMessage("تعذّر تحديث حالة الممثل: " + error.message);
+      return;
+    }
     loadAll();
   }
 
@@ -166,6 +182,13 @@ export default function RepresentativesPage() {
             <strong>{rep.full_name}</strong>
             <div>الوكالة: {agencyName(rep.agency_id)}</div>
             {rep.phone && <div>{rep.phone}</div>}
+            <div>الحالة: {rep.is_active ? "نشط" : "موقوف"}</div>
+            <button
+              onClick={() => toggleActive(rep)}
+              style={{ marginTop: "0.5rem", padding: "0.4rem 0.8rem" }}
+            >
+              {rep.is_active ? "تعطيل الممثل" : "تفعيل الممثل"}
+            </button>
           </li>
         ))}
       </ul>
