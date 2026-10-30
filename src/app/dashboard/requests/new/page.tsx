@@ -18,7 +18,10 @@ import {
   type FieldDef,
 } from "@/lib/visa-catalog";
 
+type Category = "b2c" | "b2b";
 type Client = { id: string; full_name: string; phone: string };
+type Agency = { id: string; name: string; approval_status: string };
+type Representative = { id: string; full_name: string; agency_id: string; is_active: boolean };
 
 const SERVICE_LABELS: Record<string, string> = {
   visa: "تأشيرة",
@@ -94,7 +97,10 @@ function DynamicField({
 export default function NewRequestPage() {
   const router = useRouter();
 
+  const [category, setCategory] = useState<Category>("b2c");
   const [clients, setClients] = useState<Client[]>([]);
+  const [agencies, setAgencies] = useState<Agency[]>([]);
+  const [representatives, setRepresentatives] = useState<Representative[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -102,6 +108,8 @@ export default function NewRequestPage() {
   const [clientId, setClientId] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
+  const [agencyId, setAgencyId] = useState("");
+  const [representativeId, setRepresentativeId] = useState("");
   const [notes, setNotes] = useState("");
 
   const [destination, setDestination] = useState("");
@@ -117,19 +125,43 @@ export default function NewRequestPage() {
   const prioritySet = new Set(PRIORITY_DESTINATION_CODES);
 
   useEffect(() => {
-    async function loadClients() {
-      const { data, error } = await supabase
-        .from("clients")
-        .select("id, full_name, phone")
-        .order("full_name", { ascending: true });
+    const type = new URLSearchParams(window.location.search).get("type");
+    if (type === "b2b") setCategory("b2b");
+
+    async function load() {
+      const [clientRes, agencyRes, repRes] = await Promise.all([
+        supabase.from("clients").select("id, full_name, phone").order("full_name", { ascending: true }),
+        supabase.from("agencies").select("id, name, approval_status").order("name", { ascending: true }),
+        supabase.from("agency_representatives").select("id, full_name, agency_id, is_active").order("full_name", { ascending: true }),
+      ]);
+
+      const error = clientRes.error ?? agencyRes.error ?? repRes.error;
       if (error) {
-        setMessage("تعذّر تحميل الزبائن: " + error.message);
+        setMessage("تعذّر تحميل البيانات: " + error.message);
         return;
       }
-      setClients((data as Client[]) ?? []);
+
+      setClients((clientRes.data as Client[]) ?? []);
+      setAgencies((agencyRes.data as Agency[]) ?? []);
+      setRepresentatives((repRes.data as Representative[]) ?? []);
     }
-    loadClients();
+
+    load();
   }, []);
+
+  function switchCategory(next: Category) {
+    setCategory(next);
+    setClientId("");
+    setContactName("");
+    setContactPhone("");
+    setAgencyId("");
+    setRepresentativeId("");
+    setMessage(null);
+  }
+
+  const agencyRepresentatives = representatives.filter(
+    (r) => r.agency_id === agencyId && r.is_active
+  );
 
   function buildExtraFields(): Record<string, string | number | boolean> {
     const result: Record<string, string | number | boolean> = {};
@@ -143,13 +175,9 @@ export default function NewRequestPage() {
     return result;
   }
 
-  // A customer is the same only when BOTH name and phone match (decision D234).
+  // B2C identity = name AND phone together (decision D234)
   async function findExistingClient(name: string, phone: string): Promise<string | null> {
-    const { data } = await supabase
-      .from("clients")
-      .select("id, full_name")
-      .eq("phone", phone);
-
+    const { data } = await supabase.from("clients").select("id, full_name").eq("phone", phone);
     const match = ((data as { id: string; full_name: string }[]) ?? []).find(
       (c) => c.full_name.trim().toLowerCase() === name.trim().toLowerCase()
     );
@@ -170,25 +198,38 @@ export default function NewRequestPage() {
       return;
     }
 
-    let resolvedClientId: string | null = clientId || null;
+    let resolvedClientId: string | null = null;
     let savedContactName: string | null = null;
     let savedContactPhone: string | null = null;
+    let savedAgencyId: string | null = null;
+    let savedRepId: string | null = null;
 
-    if (!resolvedClientId) {
-      if (!contactName.trim() || !contactPhone.trim()) {
-        setMessage("اختر زبوناً، أو أدخل الاسم والهاتف.");
+    if (category === "b2b") {
+      if (!agencyId || !representativeId) {
+        setMessage("اختر الوكالة والممثل.");
         return;
       }
+      savedAgencyId = agencyId;
+      savedRepId = representativeId;
+    } else {
+      if (clientId) {
+        resolvedClientId = clientId;
+      } else {
+        if (!contactName.trim() || !contactPhone.trim()) {
+          setMessage("اختر زبوناً، أو أدخل الاسم والهاتف.");
+          return;
+        }
 
-      const normalized = normalizePhone(contactPhone);
-      if (!/^\+[0-9]{8,15}$/.test(normalized)) {
-        setMessage("صيغة الرقم غير صحيحة. مثال: 0550123456");
-        return;
+        const normalized = normalizePhone(contactPhone);
+        if (!/^\+[0-9]{8,15}$/.test(normalized)) {
+          setMessage("صيغة الرقم غير صحيحة. مثال: 0550123456");
+          return;
+        }
+
+        resolvedClientId = await findExistingClient(contactName, normalized);
+        savedContactName = contactName.trim();
+        savedContactPhone = normalized;
       }
-
-      resolvedClientId = await findExistingClient(contactName, normalized);
-      savedContactName = contactName.trim();
-      savedContactPhone = normalized;
     }
 
     setLoading(true);
@@ -198,6 +239,8 @@ export default function NewRequestPage() {
       .insert({
         service_type: serviceType,
         client_id: resolvedClientId,
+        agency_id: savedAgencyId,
+        representative_id: savedRepId,
         source: "manual",
         notes: notes.trim() || null,
         contact_name: savedContactName,
@@ -229,19 +272,38 @@ export default function NewRequestPage() {
     }
 
     setLoading(false);
-    router.push("/dashboard/requests");
+    router.push(category === "b2b" ? "/dashboard/requests?type=b2b" : "/dashboard/requests?type=b2c");
   }
+
+  const isB2b = category === "b2b";
 
   return (
     <main style={{ maxWidth: 520, margin: "2rem auto", padding: "0 1rem" }}>
       <button
-        onClick={() => router.push("/dashboard/requests")}
+        onClick={() => router.push(`/dashboard/requests?type=${category}`)}
         style={{ marginBottom: "1rem", padding: "0.4rem 0.8rem" }}
       >
-        رجوع إلى كل الطلبات
+        رجوع
       </button>
 
       <h1>طلب جديد</h1>
+
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+        <button
+          type="button"
+          onClick={() => switchCategory("b2c")}
+          style={{ flex: 1, padding: "0.6rem", fontWeight: !isB2b ? "bold" : "normal" }}
+        >
+          B2C (فرد)
+        </button>
+        <button
+          type="button"
+          onClick={() => switchCategory("b2b")}
+          style={{ flex: 1, padding: "0.6rem", fontWeight: isB2b ? "bold" : "normal" }}
+        >
+          B2B (وكالة)
+        </button>
+      </div>
 
       <form onSubmit={handleSubmit}>
         <label style={{ display: "block", marginBottom: "1rem" }}>
@@ -262,40 +324,88 @@ export default function NewRequestPage() {
           </select>
         </label>
 
-        <label style={{ display: "block", marginBottom: "1rem" }}>
-          الزبون الموجود (اختياري)
-          <select
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            style={{ display: "block", width: "100%", padding: "0.5rem" }}
-          >
-            <option value="">زبون جديد أو غير مسجّل</option>
-            {clients.map((client) => (
-              <option key={client.id} value={client.id}>
-                {client.full_name} · {client.phone}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {!clientId && (
+        {!isB2b && (
           <>
             <label style={{ display: "block", marginBottom: "1rem" }}>
-              الاسم الكامل
-              <input
-                value={contactName}
-                onChange={(e) => setContactName(e.target.value)}
+              الزبون الموجود (اختياري)
+              <select
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
                 style={{ display: "block", width: "100%", padding: "0.5rem" }}
-              />
+              >
+                <option value="">زبون جديد أو غير مسجّل</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.full_name} · {client.phone}
+                  </option>
+                ))}
+              </select>
             </label>
+
+            {!clientId && (
+              <>
+                <label style={{ display: "block", marginBottom: "1rem" }}>
+                  الاسم الكامل
+                  <input
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
+                    style={{ display: "block", width: "100%", padding: "0.5rem" }}
+                  />
+                </label>
+                <label style={{ display: "block", marginBottom: "1rem" }}>
+                  رقم الهاتف
+                  <input
+                    inputMode="tel"
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    style={{ display: "block", width: "100%", padding: "0.5rem" }}
+                  />
+                </label>
+              </>
+            )}
+          </>
+        )}
+
+        {isB2b && (
+          <>
             <label style={{ display: "block", marginBottom: "1rem" }}>
-              رقم الهاتف
-              <input
-                inputMode="tel"
-                value={contactPhone}
-                onChange={(e) => setContactPhone(e.target.value)}
+              الوكالة
+              <select
+                required
+                value={agencyId}
+                onChange={(e) => {
+                  setAgencyId(e.target.value);
+                  setRepresentativeId("");
+                }}
                 style={{ display: "block", width: "100%", padding: "0.5rem" }}
-              />
+              >
+                <option value="">اختر الوكالة</option>
+                {agencies
+                  .filter((a) => a.approval_status === "approved")
+                  .map((agency) => (
+                    <option key={agency.id} value={agency.id}>
+                      {agency.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              الممثل
+              <select
+                required
+                value={representativeId}
+                onChange={(e) => setRepresentativeId(e.target.value)}
+                disabled={!agencyId}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              >
+                <option value="">اختر الممثل</option>
+                {agencyRepresentatives.map((rep) => (
+                  <option key={rep.id} value={rep.id}>
+                    {rep.full_name}
+                  </option>
+                ))}
+              </select>
             </label>
           </>
         )}

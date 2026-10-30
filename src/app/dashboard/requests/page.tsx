@@ -6,6 +6,8 @@ import { supabase } from "@/lib/supabase";
 import { getCountryByCode } from "@/lib/countries";
 import { APPLICATION_TYPES, getVisaType } from "@/lib/visa-catalog";
 
+type Category = "b2c" | "b2b";
+
 type Client = { id: string; full_name: string; phone: string };
 
 type RequestRow = {
@@ -55,9 +57,10 @@ const SOURCE_LABELS: Record<string, string> = {
   public_intake: "من الموقع",
 };
 
-export default function AllRequestsPage() {
+export default function RequestsPage() {
   const router = useRouter();
 
+  const [category, setCategory] = useState<Category>("b2c");
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [agencies, setAgencies] = useState<Agency[]>([]);
@@ -101,11 +104,16 @@ export default function AllRequestsPage() {
   }
 
   useEffect(() => {
+    const type = new URLSearchParams(window.location.search).get("type");
+    if (type === "b2b") setCategory("b2b");
     loadAll();
   }, []);
 
-  // Customer name and phone come from the customer file when linked,
-  // otherwise from the contact details entered on the website.
+  // Each category shows only its own requests
+  const visibleRequests = requests.filter((row) =>
+    category === "b2b" ? row.agency_id !== null : row.agency_id === null
+  );
+
   function customerName(row: RequestRow): string {
     if (row.agency_id) {
       const agency = agencies.find((a) => a.id === row.agency_id)?.name ?? "—";
@@ -140,14 +148,25 @@ export default function AllRequestsPage() {
     return APPLICATION_TYPES.find((t) => t.value === value)?.labelAr ?? value;
   }
 
-  function formatDate(value: string): string {
-    return value.slice(0, 10);
-  }
-
-  // Approval (decision D2): creates the customer file if name+phone is new,
-  // then links this request to it and moves it to "request".
+  // Approval (decision D2). B2C: creates the customer file if name+phone is new.
+  // B2B: the agency is already known, so only the status changes.
   async function approveInquiry(row: RequestRow) {
     setMessage(null);
+
+    if (row.agency_id) {
+      const { error } = await supabase
+        .from("service_requests")
+        .update({ status: "request" })
+        .eq("id", row.id);
+
+      if (error) {
+        setMessage("تعذّر تحويل الطلب: " + error.message);
+        return;
+      }
+      setMessage("تمت الموافقة على طلب الوكالة.");
+      loadAll();
+      return;
+    }
 
     let clientIdToLink = row.client_id;
 
@@ -160,8 +179,7 @@ export default function AllRequestsPage() {
       }
 
       const existing = clients.find(
-        (c) =>
-          c.phone === phone && c.full_name.trim().toLowerCase() === name.toLowerCase()
+        (c) => c.phone === phone && c.full_name.trim().toLowerCase() === name.toLowerCase()
       );
 
       if (existing) {
@@ -195,30 +213,55 @@ export default function AllRequestsPage() {
     loadAll();
   }
 
+  const isB2b = category === "b2b";
+
   return (
     <main style={{ maxWidth: 560, margin: "2rem auto", padding: "0 1rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>كل الطلبات</h1>
+      <button onClick={() => router.push("/dashboard")} style={{ marginBottom: "1rem", padding: "0.4rem 0.8rem" }}>
+        رجوع إلى الأقسام
+      </button>
+
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
         <button
-          onClick={() => router.push("/dashboard/requests/new")}
+          onClick={() => setCategory("b2c")}
+          style={{
+            flex: 1,
+            padding: "0.6rem",
+            fontWeight: category === "b2c" ? "bold" : "normal",
+            background: category === "b2c" ? "#eef" : "white",
+          }}
+        >
+          طلبات B2C
+        </button>
+        <button
+          onClick={() => setCategory("b2b")}
+          style={{
+            flex: 1,
+            padding: "0.6rem",
+            fontWeight: category === "b2b" ? "bold" : "normal",
+            background: category === "b2b" ? "#eef" : "white",
+          }}
+        >
+          طلبات B2B
+        </button>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h1>{isB2b ? "طلبات B2B (الوكالات)" : "طلبات B2C (الأفراد)"}</h1>
+        <button
+          onClick={() => router.push(`/dashboard/requests/new?type=${category}`)}
           style={{ padding: "0.5rem 0.9rem" }}
         >
           طلب جديد
         </button>
       </div>
 
-      <p>
-        <button onClick={() => router.push("/dashboard/clients")} style={{ padding: "0.4rem 0.8rem" }}>
-          صفحة الزبائن
-        </button>
-      </p>
-
       {message && <p>{message}</p>}
 
-      {requests.length === 0 && <p>لا توجد طلبات بعد.</p>}
+      {visibleRequests.length === 0 && <p>لا توجد طلبات في هذا القسم بعد.</p>}
 
       <ul style={{ listStyle: "none", padding: 0 }}>
-        {requests.map((row) => {
+        {visibleRequests.map((row) => {
           const visa = visaByRequest[row.id];
 
           return (
@@ -236,7 +279,7 @@ export default function AllRequestsPage() {
                 <span>{STATUS_LABELS[row.status] ?? row.status}</span>
               </div>
 
-              <div>الزبون: {customerName(row)}</div>
+              <div>{isB2b ? "الوكالة والممثل" : "الزبون"}: {customerName(row)}</div>
               <div style={{ direction: "ltr", textAlign: "right" }}>
                 الهاتف: {customerPhone(row)}
               </div>
@@ -254,7 +297,7 @@ export default function AllRequestsPage() {
                 </>
               )}
 
-              <div>تاريخ الطلب: {formatDate(row.created_at)}</div>
+              <div>تاريخ الطلب: {row.created_at.slice(0, 10)}</div>
 
               <div style={{ marginTop: "0.5rem" }}>
                 <button
@@ -266,7 +309,7 @@ export default function AllRequestsPage() {
 
                 {row.status === "inquiry" && (
                   <button onClick={() => approveInquiry(row)} style={{ padding: "0.4rem 0.8rem" }}>
-                    موافقة الزبون
+                    موافقة
                   </button>
                 )}
               </div>

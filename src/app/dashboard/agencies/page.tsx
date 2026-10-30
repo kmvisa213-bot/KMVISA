@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Agency = {
@@ -11,6 +12,7 @@ type Agency = {
 };
 
 export default function AgenciesPage() {
+  const router = useRouter();
   const [agencies, setAgencies] = useState<Agency[]>([]);
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
@@ -127,6 +129,12 @@ export default function AgenciesPage() {
               style={{ marginTop: "0.5rem", padding: "0.4rem 0.8rem" }}
             >
               {agency.approval_status === "approved" ? "إيقاف الاعتماد" : "تفعيل الاعتماد"}
+            </button>
+            <button
+              onClick={() => router.push(`/dashboard/agencies/${agency.id}`)}
+              style={{ marginTop: "0.5rem", marginRight: "0.5rem", padding: "0.4rem 0.8rem" }}
+            >
+              فتح الملف
             </button>
           </li>
         ))}
