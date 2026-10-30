@@ -145,7 +145,7 @@ export default function RequestsPage() {
   const [loading, setLoading] = useState(false);
 
   // Creation form fields
-  const [serviceType, setServiceType] = useState("visa");
+  const [serviceType, setServiceType] = useState("");
   const [clientId, setClientId] = useState("");
   const [notes, setNotes] = useState("");
   const [destination, setDestination] = useState("");
@@ -258,6 +258,11 @@ export default function RequestsPage() {
     event.preventDefault();
     setMessage(null);
 
+    if (!serviceType) {
+      setMessage("Select Service Type");
+      return;
+    }
+
     if (serviceType === "visa" && (!destination || !visaType || !applicationType)) {
       setMessage("اختر الوجهة ونوع التأشيرة ونوع الطلب.");
       return;
@@ -343,6 +348,9 @@ export default function RequestsPage() {
             onChange={(e) => setServiceType(e.target.value)}
             style={{ display: "block", width: "100%", padding: "0.5rem" }}
           >
+            <option value="" disabled>
+              Select Service Type
+            </option>
             {Object.entries(SERVICE_LABELS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}

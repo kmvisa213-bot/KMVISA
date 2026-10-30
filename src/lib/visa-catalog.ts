@@ -16,10 +16,7 @@ export const VISA_TYPES: VisaTypeDef[] = [
   {
     value: "tourism",
     labelAr: "سياحة",
-    fields: [
-      { key: "trip_duration_days", label: "مدة الرحلة بالأيام", type: "number" },
-      { key: "accommodation", label: "مكان الإقامة", type: "text" },
-    ],
+    fields: [],
   },
   {
     value: "business",

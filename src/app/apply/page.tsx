@@ -104,7 +104,7 @@ export default function ApplyPage() {
   const [isAgency, setIsAgency] = useState(false);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
-  const [serviceType, setServiceType] = useState("visa");
+  const [serviceType, setServiceType] = useState("");
   const [notes, setNotes] = useState("");
   const [agencyName, setAgencyName] = useState("");
   const [representativeName, setRepresentativeName] = useState("");
@@ -141,6 +141,11 @@ export default function ApplyPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+
+    if (!serviceType) {
+      setError("Select Service Type");
+      return;
+    }
 
     if (serviceType === "visa" && (!destination || !visaType || !applicationType)) {
       setError("اختر الوجهة ونوع التأشيرة ونوع الطلب.");
@@ -252,6 +257,9 @@ export default function ApplyPage() {
             onChange={(e) => setServiceType(e.target.value)}
             style={{ display: "block", width: "100%", padding: "0.5rem" }}
           >
+            <option value="" disabled>
+              Select Service Type
+            </option>
             {SERVICE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
