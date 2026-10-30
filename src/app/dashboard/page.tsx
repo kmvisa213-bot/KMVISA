@@ -20,6 +20,11 @@ const SECTIONS = [
     href: "/dashboard/requests?type=b2b",
   },
   {
+    title: "المالية",
+    description: "الإيرادات والمدفوعات والمتبقي والمصاريف والأرباح",
+    href: "/dashboard/finance",
+  },
+  {
     title: "وكالات B2B",
     description: "ملفات الوكالات، وممثليها، وطلباتها",
     href: "/dashboard/agencies",
