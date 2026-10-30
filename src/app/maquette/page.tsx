@@ -1,3 +1,4 @@
+import { BandeauFictif } from "@/components/ui/bandeau-fictif";
 import Link from "next/link";
 import { Carte, Indicateur } from "@/components/ui/carte";
 import { EnTetePage } from "@/components/ui/en-tete";
@@ -13,6 +14,7 @@ export default function Accueil() {
 
   return (
     <>
+      <BandeauFictif />
       <EnTetePage titre="Tableau de bord" sousTitre="Vendredi 30 octobre 2026" actions={<NouvelleDemande />} />
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">

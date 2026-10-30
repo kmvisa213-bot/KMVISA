@@ -29,11 +29,24 @@ export const STATUTS_PAIEMENT: Record<StatutPaiement, { label: string; classes: 
   paid: { label: "Payé", classes: "bg-emerald-50 text-emerald-800" },
 };
 
+// Valeurs identiques à la contrainte service_requests_service_type_check.
 export const TYPES_SERVICE: Record<string, string> = {
   visa: "Visa",
-  flight: "Billet d'avion",
-  hotel: "Hôtel",
-  quote: "Devis",
-  insurance: "Assurance voyage",
+  flight_ticket: "Billet d'avion",
+  hotel_booking: "Hôtel",
   other: "Autre service",
+};
+
+export const TYPES_VISA_FR: Record<string, string> = {
+  tourism: "Tourisme",
+  business: "Affaires",
+  studies: "Études",
+  family_reunification: "Regroupement familial",
+  long_stay_d: "Long séjour (type D)",
+  scientific_researcher: "Chercheur scientifique",
+};
+
+export const TYPES_DEMANDE_VISA_FR: Record<string, string> = {
+  first: "Première demande",
+  renewal: "Renouvellement",
 };

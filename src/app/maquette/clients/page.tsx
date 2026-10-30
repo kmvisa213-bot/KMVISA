@@ -1,3 +1,4 @@
+import { BandeauFictif } from "@/components/ui/bandeau-fictif";
 import { Carte } from "@/components/ui/carte";
 import { Bouton, EnTetePage } from "@/components/ui/en-tete";
 import { clients } from "@/lib/donnees-fictives";
@@ -8,6 +9,7 @@ const td = "border-b border-stone-100 px-2 py-3";
 export default function Clients() {
   return (
     <>
+      <BandeauFictif />
       <EnTetePage titre="Clients et agences" sousTitre="Un seul profil par personne ou par agence" actions={<Bouton variante="secondaire">+ Nouveau client</Bouton>} />
       <Carte>
         <div className="-mx-2 overflow-x-auto">
