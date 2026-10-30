@@ -1,209 +1,128 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-type Invoice = {
-  id: string;
-  request_id: string;
-  invoice_number: string | null;
-  status: string;
-  amount_dzd: number;
-  issued_at: string | null;
+// All figures come from the finance_summary view, which reads the ledger tables directly.
+// Revenue is recognized only when a service is completed. Invoices and advances are not revenue.
+
+type Summary = {
+  cash_balance_dzd: number;
+  recognized_revenue_dzd: number;
+  receivables_dzd: number;
+  payables_dzd: number;
+  client_advances_dzd: number;
+  recognized_expenses_dzd: number;
+  net_profit_dzd: number;
+  projected_profit_dzd: number;
 };
 
-type Balance = {
-  invoice_id: string;
+type Recognition = {
   request_id: string;
-  amount_dzd: number;
-  paid_dzd: number;
-  balance_dzd: number;
-  payment_state: string;
-  status: string;
+  recognized_dzd: number;
+  recognized_at: string;
 };
 
-type Payment = {
+type Advance = {
   id: string;
-  request_id: string;
-  invoice_id: string | null;
+  request_id: string | null;
+  client_id: string | null;
+  agency_id: string | null;
   amount: number;
   currency: string;
   amount_dzd: number;
-  status: string;
-  paid_at: string;
-  receipt_number: string | null;
+  date_received: string;
 };
 
-type Expense = {
+type SupplierInvoice = {
   id: string;
-  request_id: string | null;
-  description: string;
-  category: string;
+  supplier_id: string;
+  invoice_number: string;
+  amount: number;
+  currency: string;
   amount_dzd: number;
-  payment_status: string;
+  due_date: string | null;
   status: string;
-  incurred_at: string;
 };
 
-type RequestLite = { id: string; client_id: string | null; agency_id: string | null };
-
-const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
-  office: "مكتب",
-  transport: "نقل",
-  communication: "اتصالات",
-  supplies: "لوازم",
-  bank_fees: "عمولات بنكية",
-  government_fees: "رسوم حكومية",
-  salaries: "رواتب",
-  visa_fees: "رسوم تأشيرات",
-  ticket_cost: "تكلفة تذاكر",
-  hotel_cost: "تكلفة فنادق",
-  supplier_cost: "موردون",
-  other: "أخرى",
-};
+type RequestLite = { id: string; reference: string };
+type Named = { id: string; name?: string; full_name?: string };
 
 function formatDzd(value: number): string {
-  return `${Math.round(value).toLocaleString("ar-DZ")} د.ج`;
+  return `${Math.round(Number(value)).toLocaleString("ar-DZ")} د.ج`;
 }
 
-function dateOnly(value: string | null): string {
-  return value ? value.slice(0, 10) : "";
-}
+const cardStyle = {
+  border: "1px solid #ddd",
+  borderRadius: 8,
+  padding: "0.75rem",
+  flex: "1 1 45%",
+  minWidth: 140,
+};
 
 export default function FinancePage() {
   const router = useRouter();
 
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [balances, setBalances] = useState<Balance[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [requests, setRequests] = useState<RequestLite[]>([]);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [recognitions, setRecognitions] = useState<Recognition[]>([]);
+  const [advances, setAdvances] = useState<Advance[]>([]);
+  const [supplierInvoices, setSupplierInvoices] = useState<SupplierInvoice[]>([]);
+  const [requestRefs, setRequestRefs] = useState<Record<string, string>>({});
+  const [clientNames, setClientNames] = useState<Record<string, string>>({});
+  const [agencyNames, setAgencyNames] = useState<Record<string, string>>({});
+  const [supplierNames, setSupplierNames] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
 
-  // Date filters apply to the transaction date of each record
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-
   async function loadAll() {
-    const [invRes, balRes, payRes, expRes, reqRes] = await Promise.all([
-      supabase.from("invoices").select("id, request_id, invoice_number, status, amount_dzd, issued_at"),
-      supabase.from("invoice_balances").select("invoice_id, request_id, amount_dzd, paid_dzd, balance_dzd, payment_state, status"),
-      supabase.from("payments").select("id, request_id, invoice_id, amount, currency, amount_dzd, status, paid_at, receipt_number"),
-      supabase.from("expenses").select("id, request_id, description, category, amount_dzd, payment_status, status, incurred_at"),
-      supabase.from("service_requests").select("id, client_id, agency_id"),
+    const [sumRes, recRes, advRes, supRes, reqRes, cliRes, agRes, supplierRes] = await Promise.all([
+      supabase.from("finance_summary").select("*").single(),
+      supabase.from("revenue_recognitions").select("request_id, recognized_dzd, recognized_at").order("recognized_at", { ascending: false }),
+      supabase.from("client_advances").select("id, request_id, client_id, agency_id, amount, currency, amount_dzd, date_received").eq("status", "held"),
+      supabase.from("supplier_invoices").select("id, supplier_id, invoice_number, amount, currency, amount_dzd, due_date, status").eq("status", "pending"),
+      supabase.from("service_requests").select("id, reference"),
+      supabase.from("clients").select("id, full_name"),
+      supabase.from("agencies").select("id, name"),
+      supabase.from("suppliers").select("id, name"),
     ]);
 
-    const error = invRes.error ?? balRes.error ?? payRes.error ?? expRes.error ?? reqRes.error;
+    const error =
+      sumRes.error ?? recRes.error ?? advRes.error ?? supRes.error ?? reqRes.error ?? cliRes.error ?? agRes.error ?? supplierRes.error;
     if (error) {
       setMessage("تعذّر تحميل البيانات المالية: " + error.message);
       return;
     }
 
-    setInvoices((invRes.data as Invoice[]) ?? []);
-    setBalances((balRes.data as Balance[]) ?? []);
-    setPayments((payRes.data as Payment[]) ?? []);
-    setExpenses((expRes.data as Expense[]) ?? []);
-    setRequests((reqRes.data as RequestLite[]) ?? []);
+    setSummary(sumRes.data as Summary);
+    setRecognitions((recRes.data as Recognition[]) ?? []);
+    setAdvances((advRes.data as Advance[]) ?? []);
+    setSupplierInvoices((supRes.data as SupplierInvoice[]) ?? []);
+
+    const refs: Record<string, string> = {};
+    for (const r of (reqRes.data as RequestLite[]) ?? []) refs[r.id] = r.reference;
+    setRequestRefs(refs);
+
+    const toMap = (rows: Named[] | null) => {
+      const m: Record<string, string> = {};
+      for (const row of rows ?? []) m[row.id] = row.full_name ?? row.name ?? "—";
+      return m;
+    };
+    setClientNames(toMap((cliRes.data as Named[]) ?? []));
+    setAgencyNames(toMap((agRes.data as Named[]) ?? []));
+    setSupplierNames(toMap((supplierRes.data as Named[]) ?? []));
   }
 
   useEffect(() => {
     loadAll();
   }, []);
 
-  function inRange(date: string): boolean {
-    const d = dateOnly(date);
-    if (from && d < from) return false;
-    if (to && d > to) return false;
-    return true;
+  function partyName(advance: Advance): string {
+    if (advance.client_id) return clientNames[advance.client_id] ?? "—";
+    if (advance.agency_id) return agencyNames[advance.agency_id] ?? "—";
+    return "—";
   }
 
-  const requestById = useMemo(() => {
-    const map: Record<string, RequestLite> = {};
-    for (const r of requests) map[r.id] = r;
-    return map;
-  }, [requests]);
-
-  function segmentOf(requestId: string | null): "b2b" | "b2c" | "none" {
-    if (!requestId) return "none";
-    const r = requestById[requestId];
-    if (!r) return "none";
-    return r.agency_id ? "b2b" : "b2c";
-  }
-
-  // Revenue: issued invoices only (an invoice is not income until issued, and cash is counted from payments)
-  const issuedInRange = invoices.filter(
-    (i) => i.status === "issued" && i.issued_at && inRange(i.issued_at)
-  );
-  const revenue = issuedInRange.reduce((sum, i) => sum + Number(i.amount_dzd), 0);
-  const revenueB2c = issuedInRange
-    .filter((i) => segmentOf(i.request_id) === "b2c")
-    .reduce((sum, i) => sum + Number(i.amount_dzd), 0);
-  const revenueB2b = issuedInRange
-    .filter((i) => segmentOf(i.request_id) === "b2b")
-    .reduce((sum, i) => sum + Number(i.amount_dzd), 0);
-
-  // Collected: confirmed payments only (refunds are negative and reduce the total)
-  const confirmedInRange = payments.filter(
-    (p) => p.status === "confirmed" && inRange(p.paid_at)
-  );
-  const collected = confirmedInRange.reduce((sum, p) => sum + Number(p.amount_dzd), 0);
-
-  // Outstanding: current balance of issued invoices (not date-filtered: it is a current position)
-  const outstandingBalances = balances.filter((b) => {
-    const inv = invoices.find((i) => i.id === b.invoice_id);
-    return inv?.status === "issued";
-  });
-  const outstanding = outstandingBalances.reduce((sum, b) => sum + Math.max(Number(b.balance_dzd), 0), 0);
-  const unpaidInvoicesCount = outstandingBalances.filter((b) => Number(b.balance_dzd) > 0).length;
-
-  // Expenses: active records in range
-  const activeExpensesInRange = expenses.filter(
-    (e) => e.status === "active" && inRange(e.incurred_at)
-  );
-  const totalExpenses = activeExpensesInRange.reduce((sum, e) => sum + Number(e.amount_dzd), 0);
-  const paidExpenses = activeExpensesInRange
-    .filter((e) => e.payment_status === "paid")
-    .reduce((sum, e) => sum + Number(e.amount_dzd), 0);
-
-  const expectedProfit = revenue - totalExpenses;
-  const actualProfit = collected - paidExpenses;
-  const cashBalance = collected - paidExpenses;
-
-  const expensesByCategory: Record<string, number> = {};
-  for (const e of activeExpensesInRange) {
-    expensesByCategory[e.category] = (expensesByCategory[e.category] ?? 0) + Number(e.amount_dzd);
-  }
-
-  // Financial history: payments and expenses together, newest first
-  const history = [
-    ...confirmedInRange.map((p) => ({
-      key: "p-" + p.id,
-      date: dateOnly(p.paid_at),
-      kind: "دفعة",
-      label: `${p.receipt_number ?? "—"} · ${p.currency === "DZD" ? "" : p.currency + " "}${Number(p.amount).toLocaleString("ar-DZ")}`,
-      amount: Number(p.amount_dzd),
-      requestId: p.request_id,
-      sign: 1,
-    })),
-    ...activeExpensesInRange.map((e) => ({
-      key: "e-" + e.id,
-      date: dateOnly(e.incurred_at),
-      kind: "مصروف",
-      label: `${EXPENSE_CATEGORY_LABELS[e.category] ?? e.category} · ${e.description}`,
-      amount: Number(e.amount_dzd),
-      requestId: e.request_id,
-      sign: -1,
-    })),
-  ].sort((a, b) => (a.date < b.date ? 1 : -1));
-
-  const cardStyle = {
-    border: "1px solid #ddd",
-    borderRadius: 8,
-    padding: "0.75rem",
-    flex: "1 1 45%",
-    minWidth: 140,
-  };
+  const buttonStyle = { padding: "0.3rem 0.7rem", marginTop: "0.4rem" };
 
   return (
     <main style={{ maxWidth: 720, margin: "2rem auto", padding: "0 1rem" }}>
@@ -213,103 +132,102 @@ export default function FinancePage() {
 
       <h1>المالية</h1>
 
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap" }}>
-        <label>
-          من
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={{ marginRight: "0.5rem", padding: "0.3rem" }} />
-        </label>
-        <label>
-          إلى
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={{ marginRight: "0.5rem", padding: "0.3rem" }} />
-        </label>
-        <button onClick={() => { setFrom(""); setTo(""); }} style={{ padding: "0.3rem 0.6rem" }}>
-          كل الفترات
-        </button>
-      </div>
-
       {message && <p style={{ color: "red" }}>{message}</p>}
 
-      <h2>الوضع المالي العام</h2>
-      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-        <div style={cardStyle}>
-          <div>الإيرادات المستحقة</div>
-          <strong>{formatDzd(revenue)}</strong>
-        </div>
-        <div style={cardStyle}>
-          <div>المبالغ المحصّلة</div>
-          <strong>{formatDzd(collected)}</strong>
-        </div>
-        <div style={cardStyle}>
-          <div>المتبقي على الزبائن (حالياً)</div>
-          <strong>{formatDzd(outstanding)}</strong>
-        </div>
-        <div style={cardStyle}>
-          <div>فواتير غير مسددة (حالياً)</div>
-          <strong>{unpaidInvoicesCount}</strong>
-        </div>
-        <div style={cardStyle}>
-          <div>إجمالي المصاريف</div>
-          <strong>{formatDzd(totalExpenses)}</strong>
-        </div>
-        <div style={cardStyle}>
-          <div>الرصيد النقدي للفترة</div>
-          <strong>{formatDzd(cashBalance)}</strong>
-        </div>
-      </div>
+      {summary && (
+        <>
+          <h2>الوضع المالي</h2>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+            <div style={cardStyle}>
+              <div>رصيد النقدية</div>
+              <strong>{formatDzd(summary.cash_balance_dzd)}</strong>
+            </div>
+            <div style={cardStyle}>
+              <div>الإيرادات المحققة (خدمات مكتملة)</div>
+              <strong>{formatDzd(summary.recognized_revenue_dzd)}</strong>
+            </div>
+            <div style={cardStyle}>
+              <div>ذمم العملاء المدينة</div>
+              <strong>{formatDzd(summary.receivables_dzd)}</strong>
+            </div>
+            <div style={cardStyle}>
+              <div>ذمم الموردين الدائنة</div>
+              <strong>{formatDzd(summary.payables_dzd)}</strong>
+            </div>
+            <div style={cardStyle}>
+              <div>دفعات مقدمة من العملاء (التزام)</div>
+              <strong>{formatDzd(summary.client_advances_dzd)}</strong>
+            </div>
+            <div style={cardStyle}>
+              <div>الربح المتوقع (تقريبي)</div>
+              <strong>{formatDzd(summary.projected_profit_dzd)}</strong>
+            </div>
+          </div>
 
-      <h2>الربح والخسارة</h2>
-      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-        <div style={cardStyle}>
-          <div>الربح المتوقع (إيرادات مستحقة − مصاريف)</div>
-          <strong>{formatDzd(expectedProfit)}</strong>
-        </div>
-        <div style={cardStyle}>
-          <div>الربح الفعلي (محصّل − مصاريف مدفوعة)</div>
-          <strong>{formatDzd(actualProfit)}</strong>
-        </div>
-      </div>
+          <h2>الربح والخسارة</h2>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+            <div style={cardStyle}>
+              <div>المصاريف المعترف بها</div>
+              <strong>{formatDzd(summary.recognized_expenses_dzd)}</strong>
+            </div>
+            <div style={cardStyle}>
+              <div>صافي الربح (إيرادات محققة − مصاريف معترف بها)</div>
+              <strong>{formatDzd(summary.net_profit_dzd)}</strong>
+            </div>
+          </div>
+        </>
+      )}
 
-      <h2>الإيرادات حسب القسم</h2>
-      <ul>
-        <li>B2C (الأفراد): {formatDzd(revenueB2c)}</li>
-        <li>B2B (الوكالات): {formatDzd(revenueB2b)}</li>
-      </ul>
-
-      <h2>المصاريف حسب الفئة</h2>
-      {Object.keys(expensesByCategory).length === 0 && <p>لا توجد مصاريف في هذه الفترة.</p>}
-      <ul>
-        {Object.entries(expensesByCategory).map(([category, amount]) => (
-          <li key={category}>
-            {EXPENSE_CATEGORY_LABELS[category] ?? category}: {formatDzd(amount)}
+      <h2>الإيرادات المحققة</h2>
+      {recognitions.length === 0 && <p>لا توجد خدمات مكتملة بعد.</p>}
+      <ul style={{ listStyle: "none", padding: 0 }}>
+        {recognitions.map((r) => (
+          <li key={r.request_id} style={{ borderBottom: "1px solid #ddd", padding: "0.5rem 0" }}>
+            <div>{requestRefs[r.request_id] ?? "—"} · {formatDzd(r.recognized_dzd)}</div>
+            <div>تاريخ الاكتمال: {r.recognized_at.slice(0, 10)}</div>
+            <button onClick={() => router.push(`/dashboard/requests/${r.request_id}`)} style={buttonStyle}>
+              فتح الطلب
+            </button>
           </li>
         ))}
       </ul>
 
-      <h2>سجل الحركات المالية</h2>
-      {history.length === 0 && <p>لا توجد حركات في هذه الفترة.</p>}
+      <h2>دفعات مقدمة محجوزة (التزام)</h2>
+      {advances.length === 0 && <p>لا توجد دفعات مقدمة محجوزة.</p>}
       <ul style={{ listStyle: "none", padding: 0 }}>
-        {history.slice(0, 100).map((item) => (
-          <li key={item.key} style={{ borderBottom: "1px solid #ddd", padding: "0.5rem 0" }}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span>
-                {item.date} · {item.kind}
-              </span>
-              <strong style={{ color: item.sign > 0 ? "green" : "red" }}>
-                {item.sign > 0 ? "+" : "−"} {formatDzd(item.amount)}
-              </strong>
+        {advances.map((a) => (
+          <li key={a.id} style={{ borderBottom: "1px solid #ddd", padding: "0.5rem 0" }}>
+            <div>{partyName(a)} · {formatDzd(a.amount_dzd)}</div>
+            <div>
+              {a.currency !== "DZD" ? `${Number(a.amount).toLocaleString("ar-DZ")} ${a.currency} · ` : ""}
+              تاريخ الاستلام: {a.date_received.slice(0, 10)}
             </div>
-            <div>{item.label}</div>
-            {item.requestId && (
-              <button
-                onClick={() => router.push(`/dashboard/requests/${item.requestId}`)}
-                style={{ marginTop: "0.25rem", padding: "0.2rem 0.6rem" }}
-              >
+            {a.request_id && (
+              <button onClick={() => router.push(`/dashboard/requests/${a.request_id}`)} style={buttonStyle}>
                 فتح الطلب
               </button>
             )}
           </li>
         ))}
       </ul>
+
+      <h2>فواتير موردين غير مسددة</h2>
+      {supplierInvoices.length === 0 && <p>لا توجد فواتير موردين غير مسددة.</p>}
+      <ul style={{ listStyle: "none", padding: 0 }}>
+        {supplierInvoices.map((s) => (
+          <li key={s.id} style={{ borderBottom: "1px solid #ddd", padding: "0.5rem 0" }}>
+            <div>{supplierNames[s.supplier_id] ?? "—"} · {s.invoice_number}</div>
+            <div>
+              {formatDzd(s.amount_dzd)}
+              {s.due_date ? ` · تاريخ الاستحقاق: ${s.due_date}` : ""}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <p style={{ color: "#666", marginTop: "2rem" }}>
+        ملاحظة: الربح المتوقع تقريبي، وسيُدقَّق في المرحلة التالية لربط الهامش بكل خدمة.
+      </p>
     </main>
   );
 }
