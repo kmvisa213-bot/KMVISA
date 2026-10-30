@@ -24,6 +24,7 @@ function normalizePhone(raw: string): string {
 export default function ClientsPage() {
   const router = useRouter();
   const [clients, setClients] = useState<Client[]>([]);
+  const [requestCounts, setRequestCounts] = useState<Record<string, number>>({});
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
@@ -31,16 +32,27 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(false);
 
   async function loadClients() {
-    const { data, error } = await supabase
-      .from("clients")
-      .select("id, full_name, phone, notes, created_at")
-      .order("created_at", { ascending: false });
+    const [clientRes, requestRes] = await Promise.all([
+      supabase
+        .from("clients")
+        .select("id, full_name, phone, notes, created_at")
+        .order("full_name", { ascending: true }),
+      supabase.from("service_requests").select("client_id").not("client_id", "is", null),
+    ]);
 
+    const error = clientRes.error ?? requestRes.error;
     if (error) {
       setMessage("تعذّر تحميل الزبائن: " + error.message);
       return;
     }
-    setClients(data ?? []);
+
+    setClients((clientRes.data as Client[]) ?? []);
+
+    const counts: Record<string, number> = {};
+    for (const row of (requestRes.data as { client_id: string }[]) ?? []) {
+      counts[row.client_id] = (counts[row.client_id] ?? 0) + 1;
+    }
+    setRequestCounts(counts);
   }
 
   useEffect(() => {
@@ -70,7 +82,7 @@ export default function ClientsPage() {
     if (error) {
       setMessage(
         error.code === "23505"
-          ? "هذا الرقم مسجَّل مسبقاً لزبون آخر."
+          ? "هذا الزبون مسجّل مسبقاً بنفس الاسم والرقم."
           : "تعذّر الحفظ: " + error.message
       );
       return;
@@ -86,6 +98,12 @@ export default function ClientsPage() {
   return (
     <main style={{ maxWidth: 480, margin: "2rem auto", padding: "0 1rem" }}>
       <h1>الزبائن</h1>
+
+      <p>
+        <button onClick={() => router.push("/dashboard/requests")} style={{ padding: "0.4rem 0.8rem" }}>
+          كل الطلبات
+        </button>
+      </p>
 
       <form onSubmit={handleSubmit} style={{ marginBottom: "2rem" }}>
         <label style={{ display: "block", marginBottom: "1rem" }}>
@@ -136,7 +154,8 @@ export default function ClientsPage() {
             style={{ borderBottom: "1px solid #ddd", padding: "0.75rem 0" }}
           >
             <strong>{client.full_name}</strong>
-            <div>{client.phone}</div>
+            <div style={{ direction: "ltr", textAlign: "right" }}>{client.phone}</div>
+            <div>عدد الطلبات: {requestCounts[client.id] ?? 0}</div>
             {client.notes && <div>{client.notes}</div>}
             <button
               onClick={() => router.push(`/dashboard/clients/${client.id}`)}

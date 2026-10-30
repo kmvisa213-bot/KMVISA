@@ -1,0 +1,407 @@
+"use client";
+
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
+import {
+  COUNTRIES,
+  COUNTRY_GROUP_LABELS,
+  getCountryByCode,
+  type CountryGroup,
+  type CountryOption,
+} from "@/lib/countries";
+import {
+  APPLICATION_TYPES,
+  PRIORITY_DESTINATION_CODES,
+  VISA_TYPES,
+  getVisaType,
+  type FieldDef,
+} from "@/lib/visa-catalog";
+
+type Client = { id: string; full_name: string; phone: string };
+
+const SERVICE_LABELS: Record<string, string> = {
+  visa: "تأشيرة",
+  flight_ticket: "تذكرة طيران",
+  hotel_booking: "حجز فندق",
+  other: "أخرى",
+};
+
+const GROUP_ORDER: CountryGroup[] = [
+  "schengen",
+  "europe",
+  "north_america",
+  "middle_east",
+  "africa",
+  "asia",
+  "oceania",
+  "south_america",
+];
+
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/[\s\-().]/g, "");
+  if (digits.startsWith("+")) return digits;
+  if (digits.startsWith("00")) return "+" + digits.slice(2);
+  if (digits.startsWith("0")) return "+213" + digits.slice(1);
+  return "+" + digits;
+}
+
+function DynamicField({
+  field,
+  value,
+  onChange,
+}: {
+  field: FieldDef;
+  value: string | boolean | undefined;
+  onChange: (value: string | boolean) => void;
+}) {
+  if (field.type === "boolean") {
+    return (
+      <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "1rem" }}>
+        <input
+          type="checkbox"
+          checked={value === true}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        {field.label}
+      </label>
+    );
+  }
+
+  const text = typeof value === "string" ? value : "";
+
+  return (
+    <label style={{ display: "block", marginBottom: "1rem" }}>
+      {field.label}
+      {field.type === "textarea" ? (
+        <textarea
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ display: "block", width: "100%", padding: "0.5rem" }}
+        />
+      ) : (
+        <input
+          type={field.type === "number" ? "number" : field.type === "date" ? "date" : "text"}
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ display: "block", width: "100%", padding: "0.5rem" }}
+        />
+      )}
+    </label>
+  );
+}
+
+export default function NewRequestPage() {
+  const router = useRouter();
+
+  const [clients, setClients] = useState<Client[]>([]);
+  const [message, setMessage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const [serviceType, setServiceType] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const [destination, setDestination] = useState("");
+  const [visaType, setVisaType] = useState("");
+  const [applicationType, setApplicationType] = useState("");
+  const [extraValues, setExtraValues] = useState<Record<string, string | boolean>>({});
+
+  const selectedVisa = getVisaType(visaType);
+
+  const priorityCountries = PRIORITY_DESTINATION_CODES
+    .map((code) => getCountryByCode(code))
+    .filter((c): c is CountryOption => c !== undefined);
+  const prioritySet = new Set(PRIORITY_DESTINATION_CODES);
+
+  useEffect(() => {
+    async function loadClients() {
+      const { data, error } = await supabase
+        .from("clients")
+        .select("id, full_name, phone")
+        .order("full_name", { ascending: true });
+      if (error) {
+        setMessage("تعذّر تحميل الزبائن: " + error.message);
+        return;
+      }
+      setClients((data as Client[]) ?? []);
+    }
+    loadClients();
+  }, []);
+
+  function buildExtraFields(): Record<string, string | number | boolean> {
+    const result: Record<string, string | number | boolean> = {};
+    if (!selectedVisa) return result;
+
+    for (const field of selectedVisa.fields) {
+      const raw = extraValues[field.key];
+      if (raw === undefined || raw === "") continue;
+      result[field.key] = field.type === "number" ? Number(raw) : raw;
+    }
+    return result;
+  }
+
+  // A customer is the same only when BOTH name and phone match (decision D234).
+  async function findExistingClient(name: string, phone: string): Promise<string | null> {
+    const { data } = await supabase
+      .from("clients")
+      .select("id, full_name")
+      .eq("phone", phone);
+
+    const match = ((data as { id: string; full_name: string }[]) ?? []).find(
+      (c) => c.full_name.trim().toLowerCase() === name.trim().toLowerCase()
+    );
+    return match ? match.id : null;
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+
+    if (!serviceType) {
+      setMessage("Select Service Type");
+      return;
+    }
+
+    if (serviceType === "visa" && (!destination || !visaType || !applicationType)) {
+      setMessage("اختر الوجهة ونوع التأشيرة ونوع الطلب.");
+      return;
+    }
+
+    let resolvedClientId: string | null = clientId || null;
+    let savedContactName: string | null = null;
+    let savedContactPhone: string | null = null;
+
+    if (!resolvedClientId) {
+      if (!contactName.trim() || !contactPhone.trim()) {
+        setMessage("اختر زبوناً، أو أدخل الاسم والهاتف.");
+        return;
+      }
+
+      const normalized = normalizePhone(contactPhone);
+      if (!/^\+[0-9]{8,15}$/.test(normalized)) {
+        setMessage("صيغة الرقم غير صحيحة. مثال: 0550123456");
+        return;
+      }
+
+      resolvedClientId = await findExistingClient(contactName, normalized);
+      savedContactName = contactName.trim();
+      savedContactPhone = normalized;
+    }
+
+    setLoading(true);
+
+    const { data: created, error: requestError } = await supabase
+      .from("service_requests")
+      .insert({
+        service_type: serviceType,
+        client_id: resolvedClientId,
+        source: "manual",
+        notes: notes.trim() || null,
+        contact_name: savedContactName,
+        contact_phone: savedContactPhone,
+      })
+      .select("id")
+      .single();
+
+    if (requestError || !created) {
+      setLoading(false);
+      setMessage("تعذّر الحفظ: " + (requestError?.message ?? "خطأ غير معروف"));
+      return;
+    }
+
+    if (serviceType === "visa") {
+      const { error: visaError } = await supabase.from("visa_details").insert({
+        request_id: created.id,
+        country: destination,
+        visa_category: visaType,
+        application_type: applicationType,
+        extra_fields: buildExtraFields(),
+      });
+
+      if (visaError) {
+        setLoading(false);
+        setMessage("تم إنشاء الطلب، لكن تعذّر حفظ تفاصيل التأشيرة: " + visaError.message);
+        return;
+      }
+    }
+
+    setLoading(false);
+    router.push("/dashboard/requests");
+  }
+
+  return (
+    <main style={{ maxWidth: 520, margin: "2rem auto", padding: "0 1rem" }}>
+      <button
+        onClick={() => router.push("/dashboard/requests")}
+        style={{ marginBottom: "1rem", padding: "0.4rem 0.8rem" }}
+      >
+        رجوع إلى كل الطلبات
+      </button>
+
+      <h1>طلب جديد</h1>
+
+      <form onSubmit={handleSubmit}>
+        <label style={{ display: "block", marginBottom: "1rem" }}>
+          نوع الخدمة
+          <select
+            value={serviceType}
+            onChange={(e) => setServiceType(e.target.value)}
+            style={{ display: "block", width: "100%", padding: "0.5rem" }}
+          >
+            <option value="" disabled>
+              Select Service Type
+            </option>
+            {Object.entries(SERVICE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: "block", marginBottom: "1rem" }}>
+          الزبون الموجود (اختياري)
+          <select
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            style={{ display: "block", width: "100%", padding: "0.5rem" }}
+          >
+            <option value="">زبون جديد أو غير مسجّل</option>
+            {clients.map((client) => (
+              <option key={client.id} value={client.id}>
+                {client.full_name} · {client.phone}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {!clientId && (
+          <>
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              الاسم الكامل
+              <input
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              />
+            </label>
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              رقم الهاتف
+              <input
+                inputMode="tel"
+                value={contactPhone}
+                onChange={(e) => setContactPhone(e.target.value)}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              />
+            </label>
+          </>
+        )}
+
+        {serviceType === "visa" && (
+          <>
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              الوجهة
+              <select
+                required
+                value={destination}
+                onChange={(e) => setDestination(e.target.value)}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              >
+                <option value="">اختر الوجهة</option>
+                <optgroup label="الوجهات الأكثر طلباً">
+                  {priorityCountries.map((country) => (
+                    <option key={country.code} value={country.code}>
+                      {country.nameAr}
+                    </option>
+                  ))}
+                </optgroup>
+                {GROUP_ORDER.map((group) => {
+                  const items = COUNTRIES.filter(
+                    (c) => c.group === group && !prioritySet.has(c.code)
+                  );
+                  if (items.length === 0) return null;
+                  return (
+                    <optgroup key={group} label={COUNTRY_GROUP_LABELS[group]}>
+                      {items.map((country) => (
+                        <option key={country.code} value={country.code}>
+                          {country.nameAr}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+            </label>
+
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              نوع التأشيرة
+              <select
+                required
+                value={visaType}
+                onChange={(e) => {
+                  setVisaType(e.target.value);
+                  setExtraValues({});
+                }}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              >
+                <option value="">اختر نوع التأشيرة</option>
+                {VISA_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.labelAr}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              نوع الطلب
+              <select
+                required
+                value={applicationType}
+                onChange={(e) => setApplicationType(e.target.value)}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              >
+                <option value="">اختر نوع الطلب</option>
+                {APPLICATION_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.labelAr}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {selectedVisa &&
+              selectedVisa.fields.map((field) => (
+                <DynamicField
+                  key={field.key}
+                  field={field}
+                  value={extraValues[field.key]}
+                  onChange={(value) =>
+                    setExtraValues((prev) => ({ ...prev, [field.key]: value }))
+                  }
+                />
+              ))}
+          </>
+        )}
+
+        <label style={{ display: "block", marginBottom: "1rem" }}>
+          ملاحظات
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            style={{ display: "block", width: "100%", padding: "0.5rem" }}
+          />
+        </label>
+
+        <button type="submit" disabled={loading} style={{ width: "100%", padding: "0.75rem" }}>
+          {loading ? "جار الحفظ..." : "حفظ الطلب"}
+        </button>
+      </form>
+
+      {message && <p>{message}</p>}
+    </main>
+  );
+}

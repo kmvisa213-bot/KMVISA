@@ -96,7 +96,12 @@ export default function ClientFilePage() {
       }
 
       const linkedRows = (linkedData as RequestRow[]) ?? [];
-      const pendingRows = (pendingData as RequestRow[]) ?? [];
+      // Only requests with the same name AND phone belong to this customer (decision D234)
+      const pendingRows = ((pendingData as RequestRow[]) ?? []).filter(
+        (r) =>
+          (r.contact_name ?? "").trim().toLowerCase() ===
+          clientRow.full_name.trim().toLowerCase()
+      );
       setLinked(linkedRows);
       setPending(pendingRows);
 
