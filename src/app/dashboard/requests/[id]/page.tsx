@@ -3,6 +3,26 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import {
+  COUNTRIES,
+  COUNTRY_GROUP_LABELS,
+  getCountryByCode,
+  type CountryGroup,
+} from "@/lib/countries";
+import {
+  APPLICATION_TYPES,
+  PRIORITY_DESTINATION_CODES,
+  VISA_TYPES,
+  getVisaType,
+  type FieldDef,
+} from "@/lib/visa-catalog";
+import {
+  EMPTY_VISA_FORM,
+  visaFormToRow,
+  visaRowToForm,
+  type VisaDetailsRow,
+  type VisaFormValues,
+} from "@/lib/visa-form";
 
 type RequestRow = {
   id: string;
@@ -17,6 +37,17 @@ const SERVICE_LABELS: Record<string, string> = {
   hotel_booking: "حجز فندق",
   other: "أخرى",
 };
+
+const GROUP_ORDER: CountryGroup[] = [
+  "schengen",
+  "europe",
+  "north_america",
+  "middle_east",
+  "africa",
+  "asia",
+  "oceania",
+  "south_america",
+];
 
 function toNull(value: string): string | null {
   const trimmed = value.trim();
@@ -52,6 +83,51 @@ function Field({
   );
 }
 
+function DynamicField({
+  field,
+  value,
+  onChange,
+}: {
+  field: FieldDef;
+  value: string | boolean | undefined;
+  onChange: (value: string | boolean) => void;
+}) {
+  if (field.type === "boolean") {
+    return (
+      <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "1rem" }}>
+        <input
+          type="checkbox"
+          checked={value === true}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        {field.label}
+      </label>
+    );
+  }
+
+  const text = typeof value === "string" ? value : "";
+
+  return (
+    <label style={{ display: "block", marginBottom: "1rem" }}>
+      {field.label}
+      {field.type === "textarea" ? (
+        <textarea
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ display: "block", width: "100%", padding: "0.5rem" }}
+        />
+      ) : (
+        <input
+          type={field.type === "number" ? "number" : field.type === "date" ? "date" : "text"}
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ display: "block", width: "100%", padding: "0.5rem" }}
+        />
+      )}
+    </label>
+  );
+}
+
 export default function RequestDetailPage() {
   const params = useParams<{ id: string }>();
   const requestId = params.id;
@@ -60,12 +136,8 @@ export default function RequestDetailPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Visa fields
-  const [country, setCountry] = useState("");
-  const [visaType, setVisaType] = useState("");
-  const [expectedTravelDate, setExpectedTravelDate] = useState("");
-  const [appointmentDate, setAppointmentDate] = useState("");
-  const [previousVisaHistory, setPreviousVisaHistory] = useState("");
+  // Visa section: same mapping as the requests page (src/lib/visa-form.ts)
+  const [visa, setVisa] = useState<VisaFormValues>(EMPTY_VISA_FORM);
 
   // Flight fields
   const [origin, setOrigin] = useState("");
@@ -82,6 +154,14 @@ export default function RequestDetailPage() {
   const [guests, setGuests] = useState("");
   const [roomType, setRoomType] = useState("");
   const [confirmationCode, setConfirmationCode] = useState("");
+
+  function updateVisa(patch: Partial<VisaFormValues>) {
+    setVisa((prev) => ({ ...prev, ...patch }));
+  }
+
+  function setExtra(key: string, value: string | boolean) {
+    setVisa((prev) => ({ ...prev, extra: { ...prev.extra, [key]: value } }));
+  }
 
   useEffect(() => {
     async function load() {
@@ -103,13 +183,7 @@ export default function RequestDetailPage() {
           .select("*")
           .eq("request_id", requestId)
           .maybeSingle();
-        if (data) {
-          setCountry(data.country ?? "");
-          setVisaType(data.visa_type ?? "");
-          setExpectedTravelDate(data.expected_travel_date ?? "");
-          setAppointmentDate(data.appointment_date ?? "");
-          setPreviousVisaHistory(data.previous_visa_history ?? "");
-        }
+        setVisa(visaRowToForm((data as VisaDetailsRow | null) ?? null));
       }
 
       if (req.service_type === "flight_ticket") {
@@ -152,20 +226,23 @@ export default function RequestDetailPage() {
     event.preventDefault();
     if (!request) return;
 
-    setSaving(true);
     setMessage(null);
+
+    if (request.service_type === "visa") {
+      if (!visa.country || !visa.visaCategory || !visa.applicationType) {
+        setMessage("اختر الوجهة ونوع التأشيرة ونوع الطلب قبل الحفظ.");
+        return;
+      }
+    }
+
+    setSaving(true);
 
     let saveError: { message: string } | null = null;
 
     if (request.service_type === "visa") {
-      const res = await supabase.from("visa_details").upsert({
-        request_id: requestId,
-        country: toNull(country),
-        visa_type: toNull(visaType),
-        expected_travel_date: toNull(expectedTravelDate),
-        appointment_date: toNull(appointmentDate),
-        previous_visa_history: toNull(previousVisaHistory),
-      });
+      const res = await supabase
+        .from("visa_details")
+        .upsert(visaFormToRow(requestId, visa));
       saveError = res.error;
     }
 
@@ -207,6 +284,13 @@ export default function RequestDetailPage() {
     );
   }
 
+  const selectedCategory = getVisaType(visa.visaCategory);
+
+  const priorityCountries = PRIORITY_DESTINATION_CODES
+    .map((code) => getCountryByCode(code))
+    .filter((c): c is NonNullable<typeof c> => c !== undefined);
+  const prioritySet = new Set(PRIORITY_DESTINATION_CODES);
+
   return (
     <main style={{ maxWidth: 480, margin: "2rem auto", padding: "0 1rem" }}>
       <h1>{request.reference}</h1>
@@ -215,11 +299,101 @@ export default function RequestDetailPage() {
       <form onSubmit={handleSave}>
         {request.service_type === "visa" && (
           <>
-            <Field label="الدولة" value={country} onChange={setCountry} />
-            <Field label="نوع التأشيرة" value={visaType} onChange={setVisaType} />
-            <Field label="تاريخ السفر المتوقع" value={expectedTravelDate} onChange={setExpectedTravelDate} type="date" />
-            <Field label="تاريخ الموعد" value={appointmentDate} onChange={setAppointmentDate} type="date" />
-            <Field label="سجل التأشيرات السابقة" value={previousVisaHistory} onChange={setPreviousVisaHistory} />
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              الوجهة
+              <select
+                required
+                value={visa.country}
+                onChange={(e) => updateVisa({ country: e.target.value })}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              >
+                <option value="">اختر الوجهة</option>
+                <optgroup label="الوجهات الأكثر طلباً">
+                  {priorityCountries.map((country) => (
+                    <option key={country.code} value={country.code}>
+                      {country.nameAr}
+                    </option>
+                  ))}
+                </optgroup>
+                {GROUP_ORDER.map((group) => {
+                  const items = COUNTRIES.filter(
+                    (c) => c.group === group && !prioritySet.has(c.code)
+                  );
+                  if (items.length === 0) return null;
+                  return (
+                    <optgroup key={group} label={COUNTRY_GROUP_LABELS[group]}>
+                      {items.map((country) => (
+                        <option key={country.code} value={country.code}>
+                          {country.nameAr}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+            </label>
+
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              نوع التأشيرة
+              <select
+                required
+                value={visa.visaCategory}
+                onChange={(e) => updateVisa({ visaCategory: e.target.value, extra: {} })}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              >
+                <option value="">اختر نوع التأشيرة</option>
+                {VISA_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.labelAr}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label style={{ display: "block", marginBottom: "1rem" }}>
+              نوع الطلب
+              <select
+                required
+                value={visa.applicationType}
+                onChange={(e) => updateVisa({ applicationType: e.target.value })}
+                style={{ display: "block", width: "100%", padding: "0.5rem" }}
+              >
+                <option value="">اختر نوع الطلب</option>
+                {APPLICATION_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.labelAr}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <Field
+              label="تاريخ السفر المتوقع"
+              value={visa.expectedTravelDate}
+              onChange={(v) => updateVisa({ expectedTravelDate: v })}
+              type="date"
+            />
+            <Field
+              label="تاريخ الموعد"
+              value={visa.appointmentDate}
+              onChange={(v) => updateVisa({ appointmentDate: v })}
+              type="date"
+            />
+            <Field
+              label="سجل التأشيرات السابقة"
+              value={visa.previousVisaHistory}
+              onChange={(v) => updateVisa({ previousVisaHistory: v })}
+            />
+
+            {selectedCategory &&
+              selectedCategory.fields.map((field) => (
+                <DynamicField
+                  key={field.key}
+                  field={field}
+                  value={visa.extra[field.key]}
+                  onChange={(value) => setExtra(field.key, value)}
+                />
+              ))}
           </>
         )}
 
