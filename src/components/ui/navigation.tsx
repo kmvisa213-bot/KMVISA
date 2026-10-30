@@ -41,7 +41,7 @@ export function BarreLaterale() {
           );
         })}
       </nav>
-      <p className="mt-auto text-xs text-navy-200">Maquette · données fictives</p>
+      <p className="mt-auto text-xs text-navy-200">Nouvelle interface · en test</p>
     </aside>
   );
 }

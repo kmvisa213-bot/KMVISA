@@ -15,10 +15,10 @@ export type DemandeFictive = {
 
 export const demandes: DemandeFictive[] = [
   { reference: "KM-2610-001", client: "Amina B.", b2b: false, service: "visa", detail: "Schengen · France", statut: "inquiry", paiement: "unpaid", date: "30/10", resteDzd: 0 },
-  { reference: "KM-2610-002", client: "Agence Nour", b2b: true, service: "flight", detail: "Alger → Istanbul", statut: "quoted", paiement: "unpaid", date: "29/10", resteDzd: 42000 },
-  { reference: "KM-2610-003", client: "Karim M.", b2b: false, service: "hotel", detail: "Istanbul · 4 nuits", statut: "confirmed", paiement: "partial", date: "27/10", resteDzd: 68500 },
+  { reference: "KM-2610-002", client: "Agence Nour", b2b: true, service: "flight_ticket", detail: "Alger → Istanbul", statut: "quoted", paiement: "unpaid", date: "29/10", resteDzd: 42000 },
+  { reference: "KM-2610-003", client: "Karim M.", b2b: false, service: "hotel_booking", detail: "Istanbul · 4 nuits", statut: "confirmed", paiement: "partial", date: "27/10", resteDzd: 68500 },
   { reference: "KM-2610-004", client: "Samira L.", b2b: false, service: "visa", detail: "Étudiant · Espagne", statut: "in_progress", paiement: "partial", date: "22/10", resteDzd: 74000 },
-  { reference: "KM-2609-019", client: "Mourad T.", b2b: false, service: "insurance", detail: "Voyage 30 jours", statut: "completed", paiement: "paid", date: "15/10", resteDzd: 0 },
+  { reference: "KM-2609-019", client: "Mourad T.", b2b: false, service: "other", detail: "Voyage 30 jours", statut: "completed", paiement: "paid", date: "15/10", resteDzd: 0 },
   { reference: "KM-2609-014", client: "Agence Atlas", b2b: true, service: "visa", detail: "Tourisme · Italie", statut: "cancelled", paiement: "paid", date: "09/10", resteDzd: 0 },
 ];
 
