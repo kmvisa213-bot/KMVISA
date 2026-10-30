@@ -19,13 +19,21 @@ import {
 } from "@/lib/visa-catalog";
 
 type Client = { id: string; full_name: string };
+type Agency = { id: string; name: string };
+type Representative = { id: string; full_name: string; agency_id: string };
 
 type RequestRow = {
   id: string;
   reference: string;
   service_type: string;
   status: string;
+  source: string;
   client_id: string | null;
+  agency_id: string | null;
+  representative_id: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  notes: string | null;
   created_at: string;
 };
 
@@ -34,6 +42,11 @@ type VisaInfo = {
   country: string | null;
   visa_category: string | null;
   application_type: string | null;
+  expected_travel_date: string | null;
+  appointment_date: string | null;
+  previous_visa_history: string | null;
+  outcome: string | null;
+  extra_fields: Record<string, unknown> | null;
 };
 
 const SERVICE_LABELS: Record<string, string> = {
@@ -52,6 +65,16 @@ const STATUS_LABELS: Record<string, string> = {
   in_progress: "قيد التنفيذ",
   completed: "مكتملة",
   cancelled: "ملغاة",
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  manual: "يدوي",
+  public_intake: "من الموقع",
+};
+
+const OUTCOME_LABELS: Record<string, string> = {
+  approved: "مقبولة",
+  rejected: "مرفوضة",
 };
 
 const GROUP_ORDER: CountryGroup[] = [
@@ -114,17 +137,17 @@ export default function RequestsPage() {
   const router = useRouter();
 
   const [clients, setClients] = useState<Client[]>([]);
+  const [agencies, setAgencies] = useState<Agency[]>([]);
+  const [representatives, setRepresentatives] = useState<Representative[]>([]);
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [visaByRequest, setVisaByRequest] = useState<Record<string, VisaInfo>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Common form fields
+  // Creation form fields
   const [serviceType, setServiceType] = useState("visa");
   const [clientId, setClientId] = useState("");
   const [notes, setNotes] = useState("");
-
-  // Visa form fields
   const [destination, setDestination] = useState("");
   const [visaType, setVisaType] = useState("");
   const [applicationType, setApplicationType] = useState("");
@@ -133,24 +156,33 @@ export default function RequestsPage() {
   const selectedVisa = getVisaType(visaType);
 
   async function loadAll() {
-    const [clientRes, reqRes, visaRes] = await Promise.all([
+    const [clientRes, agencyRes, repRes, reqRes, visaRes] = await Promise.all([
       supabase.from("clients").select("id, full_name").order("full_name", { ascending: true }),
+      supabase.from("agencies").select("id, name").order("name", { ascending: true }),
+      supabase.from("agency_representatives").select("id, full_name, agency_id"),
       supabase
         .from("service_requests")
-        .select("id, reference, service_type, status, client_id, created_at")
+        .select(
+          "id, reference, service_type, status, source, client_id, agency_id, representative_id, contact_name, contact_phone, notes, created_at"
+        )
         .order("created_at", { ascending: false }),
       supabase
         .from("visa_details")
-        .select("request_id, country, visa_category, application_type"),
+        .select(
+          "request_id, country, visa_category, application_type, expected_travel_date, appointment_date, previous_visa_history, outcome, extra_fields"
+        ),
     ]);
 
-    const error = clientRes.error ?? reqRes.error ?? visaRes.error;
+    const error =
+      clientRes.error ?? agencyRes.error ?? repRes.error ?? reqRes.error ?? visaRes.error;
     if (error) {
       setMessage("تعذّر تحميل البيانات: " + error.message);
       return;
     }
 
     setClients((clientRes.data as Client[]) ?? []);
+    setAgencies((agencyRes.data as Agency[]) ?? []);
+    setRepresentatives((repRes.data as Representative[]) ?? []);
     setRequests((reqRes.data as RequestRow[]) ?? []);
 
     const map: Record<string, VisaInfo> = {};
@@ -165,8 +197,23 @@ export default function RequestsPage() {
   }, []);
 
   function clientName(id: string | null): string {
-    if (!id) return "بدون ملف بعد";
+    if (!id) return "";
     return clients.find((c) => c.id === id)?.full_name ?? "—";
+  }
+
+  function agencyName(id: string | null): string {
+    if (!id) return "";
+    return agencies.find((a) => a.id === id)?.name ?? "—";
+  }
+
+  function repName(id: string | null): string {
+    if (!id) return "";
+    return representatives.find((r) => r.id === id)?.full_name ?? "—";
+  }
+
+  function countryLabel(code: string | null): string {
+    if (!code) return "—";
+    return getCountryByCode(code)?.nameAr ?? code;
   }
 
   function visaTypeLabel(value: string | null): string {
@@ -179,9 +226,11 @@ export default function RequestsPage() {
     return APPLICATION_TYPES.find((t) => t.value === value)?.labelAr ?? value;
   }
 
-  function countryLabel(code: string | null): string {
-    if (!code) return "—";
-    return getCountryByCode(code)?.nameAr ?? code;
+  function formatExtraValue(value: unknown, type: FieldDef["type"]): string {
+    if (typeof value === "boolean") return value ? "نعم" : "لا";
+    if (value === null || value === undefined || value === "") return "—";
+    if (type === "date") return String(value);
+    return String(value);
   }
 
   function resetForm() {
@@ -252,7 +301,7 @@ export default function RequestsPage() {
 
     setLoading(false);
     resetForm();
-    setMessage("تم إنشاء الطلب بحالة استفسار.");
+    setMessage("تم إنشاء الاستفسار.");
     loadAll();
   }
 
@@ -283,7 +332,7 @@ export default function RequestsPage() {
   const prioritySet = new Set(PRIORITY_DESTINATION_CODES);
 
   return (
-    <main style={{ maxWidth: 480, margin: "2rem auto", padding: "0 1rem" }}>
+    <main style={{ maxWidth: 520, margin: "2rem auto", padding: "0 1rem" }}>
       <h1>الطلبات</h1>
 
       <form onSubmit={handleSubmit} style={{ marginBottom: "2rem" }}>
@@ -428,38 +477,90 @@ export default function RequestsPage() {
       <ul style={{ listStyle: "none", padding: 0 }}>
         {requests.map((row) => {
           const visa = visaByRequest[row.id];
+          const category = visa?.visa_category ? getVisaType(visa.visa_category) : undefined;
+
           return (
             <li
               key={row.id}
-              style={{ borderBottom: "1px solid #ddd", padding: "0.75rem 0" }}
+              style={{
+                border: "1px solid #ddd",
+                borderRadius: 8,
+                padding: "0.75rem",
+                marginBottom: "0.75rem",
+              }}
             >
-              <strong>{row.reference}</strong>
-              <div>{SERVICE_LABELS[row.service_type] ?? row.service_type}</div>
-              {visa && (
-                <>
-                  <div>الوجهة: {countryLabel(visa.country)}</div>
-                  <div>نوع التأشيرة: {visaTypeLabel(visa.visa_category)}</div>
-                  <div>نوع الطلب: {applicationTypeLabel(visa.application_type)}</div>
-                </>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <strong>{row.reference}</strong>
+                <span>{STATUS_LABELS[row.status] ?? row.status}</span>
+              </div>
+
+              <div>
+                {SERVICE_LABELS[row.service_type] ?? row.service_type} ·{" "}
+                {SOURCE_LABELS[row.source] ?? row.source}
+              </div>
+
+              {row.agency_id ? (
+                <div>
+                  الوكالة: {agencyName(row.agency_id)} · الممثل: {repName(row.representative_id)}
+                </div>
+              ) : row.client_id ? (
+                <div>الزبون: {clientName(row.client_id)}</div>
+              ) : (
+                <div>
+                  زبون من الموقع: {row.contact_name ?? "—"} · {row.contact_phone ?? "—"}
+                </div>
               )}
-              <div>الزبون: {clientName(row.client_id)}</div>
-              <div>الحالة: {STATUS_LABELS[row.status] ?? row.status}</div>
 
-              <button
-                onClick={() => router.push(`/dashboard/requests/${row.id}`)}
-                style={{ marginTop: "0.5rem", marginRight: "0.5rem", padding: "0.4rem 0.8rem" }}
-              >
-                التفاصيل
-              </button>
+              {row.service_type === "visa" && (
+                <div style={{ marginTop: "0.5rem", paddingTop: "0.5rem", borderTop: "1px dashed #ccc" }}>
+                  {visa ? (
+                    <>
+                      <div>الوجهة: {countryLabel(visa.country)}</div>
+                      <div>نوع التأشيرة: {visaTypeLabel(visa.visa_category)}</div>
+                      <div>نوع الطلب: {applicationTypeLabel(visa.application_type)}</div>
+                      <div>تاريخ السفر المتوقع: {visa.expected_travel_date ?? "—"}</div>
+                      <div>تاريخ الموعد: {visa.appointment_date ?? "—"}</div>
+                      {visa.outcome && (
+                        <div>النتيجة: {OUTCOME_LABELS[visa.outcome] ?? visa.outcome}</div>
+                      )}
+                      {visa.previous_visa_history && (
+                        <div>سجل التأشيرات السابقة: {visa.previous_visa_history}</div>
+                      )}
+                      {category &&
+                        category.fields.map((field) => {
+                          const value = visa.extra_fields?.[field.key];
+                          return (
+                            <div key={field.key}>
+                              {field.label}: {formatExtraValue(value, field.type)}
+                            </div>
+                          );
+                        })}
+                    </>
+                  ) : (
+                    <div style={{ color: "#888" }}>تفاصيل التأشيرة لم تُسجَّل بعد.</div>
+                  )}
+                </div>
+              )}
 
-              {row.status === "inquiry" && (
+              {row.notes && <div style={{ marginTop: "0.5rem" }}>ملاحظات: {row.notes}</div>}
+
+              <div style={{ marginTop: "0.5rem" }}>
                 <button
-                  onClick={() => convertToRequest(row)}
-                  style={{ marginTop: "0.5rem", padding: "0.4rem 0.8rem" }}
+                  onClick={() => router.push(`/dashboard/requests/${row.id}`)}
+                  style={{ marginRight: "0.5rem", padding: "0.4rem 0.8rem" }}
                 >
-                  تحويل إلى طلب (وافق الزبون)
+                  التفاصيل
                 </button>
-              )}
+
+                {row.status === "inquiry" && (
+                  <button
+                    onClick={() => convertToRequest(row)}
+                    style={{ padding: "0.4rem 0.8rem" }}
+                  >
+                    تحويل إلى طلب (وافق الزبون)
+                  </button>
+                )}
+              </div>
             </li>
           );
         })}
