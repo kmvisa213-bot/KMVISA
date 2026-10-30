@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Client = { id: string; full_name: string };
@@ -33,6 +34,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default function RequestsPage() {
+  const router = useRouter();
   const [clients, setClients] = useState<Client[]>([]);
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [clientId, setClientId] = useState("");
@@ -180,6 +182,14 @@ export default function RequestsPage() {
             <div>{SERVICE_LABELS[row.service_type] ?? row.service_type}</div>
             <div>الزبون: {clientName(row.client_id)}</div>
             <div>الحالة: {STATUS_LABELS[row.status] ?? row.status}</div>
+
+            <button
+              onClick={() => router.push(`/dashboard/requests/${row.id}`)}
+              style={{ marginTop: "0.5rem", marginRight: "0.5rem", padding: "0.4rem 0.8rem" }}
+            >
+              التفاصيل
+            </button>
+
             {row.status === "inquiry" && (
               <button
                 onClick={() => convertToRequest(row)}
