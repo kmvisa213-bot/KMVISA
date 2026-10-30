@@ -51,7 +51,16 @@ function todayString(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export default function RequestFinance({ requestId }: { requestId: string }) {
+export default function RequestFinance({
+  requestId,
+  section = "both",
+}: {
+  requestId: string;
+  section?: "price" | "expenses" | "both";
+}) {
+  const showPrice = section !== "expenses";
+  const showExpenses = section !== "price";
+
   const [agreed, setAgreed] = useState<AgreedPrice | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
@@ -232,6 +241,8 @@ export default function RequestFinance({ requestId }: { requestId: string }) {
         <p style={{ color: message.type === "error" ? "red" : "green" }}>{message.text}</p>
       )}
 
+      {showPrice && (
+      <>
       <h3>السعر المتفق عليه</h3>
       <p style={{ color: "#666" }}>هذا السعر تعاقدي، ولا يُحتسب إيراداً إلا بعد اكتمال الخدمة.</p>
 
@@ -280,6 +291,11 @@ export default function RequestFinance({ requestId }: { requestId: string }) {
         <button type="submit" style={{ ...buttonStyle, width: "100%" }}>حفظ السعر</button>
       </form>
 
+      </>
+      )}
+
+      {showExpenses && (
+      <>
       <h3 style={{ marginTop: "2rem" }}>المصاريف (فواتير الموردين)</h3>
       <p style={{ color: "#666" }}>
         المصروف يُعترف به عند تسجيل فاتورة المورد، ولا يُحسب عند الحجز.
@@ -402,6 +418,8 @@ export default function RequestFinance({ requestId }: { requestId: string }) {
         </label>
         <button type="submit" style={{ ...buttonStyle, width: "100%" }}>تسجيل المصروف</button>
       </form>
+      </>
+      )}
     </section>
   );
 }

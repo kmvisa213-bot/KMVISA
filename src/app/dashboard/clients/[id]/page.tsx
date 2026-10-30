@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { getCountryByCode } from "@/lib/countries";
 import { APPLICATION_TYPES, getVisaType } from "@/lib/visa-catalog";
+import RequestFinance from "@/components/request-finance";
 
 type Client = {
   id: string;
@@ -21,6 +22,8 @@ type RequestRow = {
   created_at: string;
   contact_name: string | null;
   contact_phone: string | null;
+  label: string | null;
+  agreed_price_dzd: number | null;
 };
 
 type VisaInfo = {
@@ -56,6 +59,9 @@ export default function ClientFilePage() {
 
   const [client, setClient] = useState<Client | null>(null);
   const [linked, setLinked] = useState<RequestRow[]>([]);
+  const [expenseByRequest, setExpenseByRequest] = useState<Record<string, number>>({});
+  const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
+  const [openPanel, setOpenPanel] = useState<{ id: string; section: "price" | "expenses" } | null>(null);
   const [pending, setPending] = useState<RequestRow[]>([]);
   const [visaByRequest, setVisaByRequest] = useState<Record<string, VisaInfo>>({});
   const [message, setMessage] = useState<string | null>(null);
@@ -78,7 +84,7 @@ export default function ClientFilePage() {
       // Requests already linked to this customer file
       const { data: linkedData, error: linkedError } = await supabase
         .from("service_requests")
-        .select("id, reference, service_type, status, created_at, contact_name, contact_phone")
+        .select("id, reference, service_type, status, created_at, contact_name, contact_phone, label, agreed_price_dzd")
         .eq("client_id", clientId)
         .is("archived_at", null)
         .order("created_at", { ascending: false });
@@ -106,6 +112,21 @@ export default function ClientFilePage() {
       );
       setLinked(linkedRows);
       setPending(pendingRows);
+
+      // Supplier costs per request (registered supplier invoices only)
+      if (linkedRows.length > 0) {
+        const { data: supData } = await supabase
+          .from("supplier_invoices")
+          .select("linked_order_id, amount_dzd")
+          .in("linked_order_id", linkedRows.map((r) => r.id))
+          .in("status", ["pending", "paid"]);
+
+        const totals: Record<string, number> = {};
+        for (const row of (supData as { linked_order_id: string; amount_dzd: number }[]) ?? []) {
+          totals[row.linked_order_id] = (totals[row.linked_order_id] ?? 0) + Number(row.amount_dzd);
+        }
+        setExpenseByRequest(totals);
+      }
 
       const ids = [...linkedRows, ...pendingRows].map((r) => r.id);
       if (ids.length > 0) {
@@ -140,8 +161,27 @@ export default function ClientFilePage() {
     return APPLICATION_TYPES.find((t) => t.value === value)?.labelAr ?? value;
   }
 
+  async function saveLabel(row: RequestRow) {
+    const value = (labelDrafts[row.id] ?? row.label ?? "").trim();
+    const { error } = await supabase
+      .from("service_requests")
+      .update({ label: value || null })
+      .eq("id", row.id);
+
+    if (error) {
+      setMessage("تعذّر حفظ الاسم: " + error.message);
+      return;
+    }
+    setLinked((prev) => prev.map((r) => (r.id === row.id ? { ...r, label: value || null } : r)));
+    setMessage("تم حفظ اسم الخدمة.");
+  }
+
   function renderRequest(row: RequestRow) {
     const visa = visaByRequest[row.id];
+    const price = Number(row.agreed_price_dzd ?? 0);
+    const expenses = expenseByRequest[row.id] ?? 0;
+    const margin = price - expenses;
+    const panelOpen = openPanel?.id === row.id;
 
     return (
       <li
@@ -159,6 +199,23 @@ export default function ClientFilePage() {
         </div>
 
         <div>{SERVICE_LABELS[row.service_type] ?? row.service_type}</div>
+
+        <div style={{ marginTop: "0.5rem" }}>
+          <input
+            placeholder="اسم الخدمة (يدوياً)"
+            value={labelDrafts[row.id] ?? row.label ?? ""}
+            onChange={(e) => setLabelDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))}
+            style={{ width: "100%", padding: "0.4rem" }}
+          />
+          <button onClick={() => saveLabel(row)} style={{ marginTop: "0.3rem", padding: "0.3rem 0.7rem" }}>
+            حفظ الاسم
+          </button>
+        </div>
+
+        <div style={{ marginTop: "0.5rem", direction: "ltr", textAlign: "right" }}>
+          السعر: {price.toLocaleString("ar-DZ")} د.ج · المصاريف: {expenses.toLocaleString("ar-DZ")} د.ج ·
+          الإجمالي: {margin.toLocaleString("ar-DZ")} د.ج
+        </div>
 
         {row.service_type === "visa" && visa && (
           <>
@@ -179,6 +236,31 @@ export default function ClientFilePage() {
         >
           فتح الطلب
         </button>
+
+        <button
+          onClick={() => setOpenPanel({ id: row.id, section: "price" })}
+          style={{ marginTop: "0.5rem", marginRight: "0.5rem", padding: "0.4rem 0.8rem" }}
+        >
+          تسعيرة
+        </button>
+        <button
+          onClick={() => setOpenPanel({ id: row.id, section: "expenses" })}
+          style={{ marginTop: "0.5rem", padding: "0.4rem 0.8rem" }}
+        >
+          مصاريف
+        </button>
+
+        {panelOpen && openPanel && (
+          <div style={{ marginTop: "0.75rem" }}>
+            <RequestFinance requestId={row.id} section={openPanel.section} />
+            <button
+              onClick={() => window.location.reload()}
+              style={{ marginTop: "0.5rem", padding: "0.4rem 0.8rem" }}
+            >
+              إغلاق وتحديث الإجماليات
+            </button>
+          </div>
+        )}
       </li>
     );
   }
@@ -203,6 +285,18 @@ export default function ClientFilePage() {
       <h1>{client.full_name}</h1>
       <div style={{ direction: "ltr", textAlign: "right" }}>{client.phone}</div>
       {client.notes && <p>{client.notes}</p>}
+
+      <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: "0.75rem", marginBottom: "1rem" }}>
+        <strong>إجمالي هذا الملف</strong>
+        <div>إجمالي الأسعار: {linked.reduce((s, r) => s + Number(r.agreed_price_dzd ?? 0), 0).toLocaleString("ar-DZ")} د.ج</div>
+        <div>إجمالي المصاريف: {linked.reduce((s, r) => s + (expenseByRequest[r.id] ?? 0), 0).toLocaleString("ar-DZ")} د.ج</div>
+        <div>
+          الصافي: {(
+            linked.reduce((s, r) => s + Number(r.agreed_price_dzd ?? 0), 0) -
+            linked.reduce((s, r) => s + (expenseByRequest[r.id] ?? 0), 0)
+          ).toLocaleString("ar-DZ")} د.ج
+        </div>
+      </div>
 
       <h2>الطلبات المرتبطة بهذا الملف ({linked.length})</h2>
       {linked.length === 0 && <p>لا توجد طلبات مرتبطة بعد.</p>}

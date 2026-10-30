@@ -16,6 +16,8 @@ type Summary = {
   recognized_expenses_dzd: number;
   net_profit_dzd: number;
   projected_profit_dzd: number;
+  business_volume_dzd: number;
+  total_expenses_dzd: number;
 };
 
 type Recognition = {
@@ -138,6 +140,14 @@ export default function FinancePage() {
         <>
           <h2>الوضع المالي</h2>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+            <div style={cardStyle}>
+              <div>رقم الأعمال (الأسعار المتفق عليها)</div>
+              <strong>{formatDzd(summary.business_volume_dzd)}</strong>
+            </div>
+            <div style={cardStyle}>
+              <div>إجمالي المصاريف</div>
+              <strong>{formatDzd(summary.total_expenses_dzd)}</strong>
+            </div>
             <div style={cardStyle}>
               <div>رصيد النقدية</div>
               <strong>{formatDzd(summary.cash_balance_dzd)}</strong>
