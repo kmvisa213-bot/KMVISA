@@ -12,6 +12,7 @@ type Section = "price" | "expenses" | "both";
 
 type RequestRow = {
   id: string;
+  status: string;
   client_id: string | null;
   agency_id: string | null;
   agreed_price: number | null;
@@ -43,9 +44,36 @@ type SupplierInvoice = {
   issue_date: string;
   due_date: string | null;
   status: string;
+  paid_at: string | null;
+  payment_method: string | null;
 };
 
 type Supplier = { id: string; name: string; type: string };
+
+type HeldAdvance = {
+  id: string;
+  amount: number;
+  currency: string;
+  amount_dzd: number;
+  date_received: string;
+  status: string;
+  linked_invoice_id: string | null;
+};
+
+type PaymentRow = {
+  id: string;
+  invoice_id: string;
+  amount: number;
+  currency: string;
+  amount_dzd: number;
+  paid_at: string;
+  method: string;
+  status: string;
+};
+
+type CancelTarget = { kind: "invoice" | "payment" | "advance" | "supplier"; id: string };
+
+const ACTIVE_REQUEST_STATUSES = ["inquiry", "request", "quoted"];
 
 const SUPPLIER_TYPE_LABELS: Record<string, string> = {
   airline: "شركة طيران",
@@ -58,6 +86,14 @@ const SUPPLIER_STATUS_LABELS: Record<string, string> = {
   pending: "غير مسددة",
   paid: "مسددة",
   disputed: "متنازع عليها",
+  cancelled: "ملغاة",
+};
+
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  cash: "نقداً",
+  bank: "تحويل بنكي",
+  card: "بطاقة",
+  other: "أخرى",
 };
 
 const PAYMENT_STATE_LABELS: Record<string, string> = {
@@ -101,7 +137,22 @@ export default function RequestFinance({
   const [balances, setBalances] = useState<Record<string, Balance>>({});
   const [supplierInvoices, setSupplierInvoices] = useState<SupplierInvoice[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [heldAdvances, setHeldAdvances] = useState<HeldAdvance[]>([]);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
+
+  // Cancellation (one inline form at a time)
+  const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+
+  // Apply advance to invoice
+  const [applyingAdvanceId, setApplyingAdvanceId] = useState<string | null>(null);
+  const [applyInvoiceId, setApplyInvoiceId] = useState("");
+
+  // Supplier settlement form
+  const [settlingSupplierInvoiceId, setSettlingSupplierInvoiceId] = useState<string | null>(null);
+  const [settleDate, setSettleDate] = useState(todayString());
+  const [settleMethod, setSettleMethod] = useState("bank");
 
   // Price form
   const [priceAmount, setPriceAmount] = useState("");
@@ -133,10 +184,10 @@ export default function RequestFinance({
   const [invDue, setInvDue] = useState("");
 
   async function loadAll() {
-    const [reqRes, invRes, balRes, supInvRes, supRes] = await Promise.all([
+    const [reqRes, invRes, balRes, supInvRes, supRes, advRes, payRes] = await Promise.all([
       supabase
         .from("service_requests")
-        .select("id, client_id, agency_id, agreed_price, agreed_currency, agreed_exchange_rate, agreed_price_dzd")
+        .select("id, status, client_id, agency_id, agreed_price, agreed_currency, agreed_exchange_rate, agreed_price_dzd")
         .eq("id", requestId)
         .single(),
       supabase
@@ -150,13 +201,25 @@ export default function RequestFinance({
         .eq("request_id", requestId),
       supabase
         .from("supplier_invoices")
-        .select("id, supplier_id, invoice_number, amount, currency, amount_dzd, issue_date, due_date, status")
+        .select("id, supplier_id, invoice_number, amount, currency, amount_dzd, issue_date, due_date, status, paid_at, payment_method")
         .eq("linked_order_id", requestId)
         .order("issue_date", { ascending: false }),
       supabase.from("suppliers").select("id, name, type").order("name", { ascending: true }),
+      supabase
+        .from("client_advances")
+        .select("id, amount, currency, amount_dzd, date_received, status, linked_invoice_id")
+        .eq("request_id", requestId)
+        .in("status", ["held", "applied"])
+        .order("date_received", { ascending: true }),
+      supabase
+        .from("payments")
+        .select("id, invoice_id, amount, currency, amount_dzd, paid_at, method, status")
+        .eq("request_id", requestId)
+        .eq("status", "confirmed")
+        .order("paid_at", { ascending: true }),
     ]);
 
-    const error = reqRes.error ?? invRes.error ?? balRes.error ?? supInvRes.error ?? supRes.error;
+    const error = reqRes.error ?? invRes.error ?? balRes.error ?? supInvRes.error ?? supRes.error ?? advRes.error ?? payRes.error;
     if (error) {
       setMessage({ type: "error", text: "تعذّر تحميل البيانات المالية: " + error.message });
       return;
@@ -176,6 +239,8 @@ export default function RequestFinance({
 
     setSupplierInvoices((supInvRes.data as SupplierInvoice[]) ?? []);
     setSuppliers((supRes.data as Supplier[]) ?? []);
+    setHeldAdvances((advRes.data as HeldAdvance[]) ?? []);
+    setPayments((payRes.data as PaymentRow[]) ?? []);
   }
 
   useEffect(() => {
@@ -231,6 +296,15 @@ export default function RequestFinance({
       return;
     }
 
+    const hasActiveInvoice = invoices.some((inv) => inv.status !== "cancelled");
+    if (hasActiveInvoice) {
+      setMessage({
+        type: "error",
+        text: "توجد فاتورة نشطة لهذه الخدمة. ألغِ الفاتورة الحالية أولاً إذا أردت إصدار أخرى.",
+      });
+      return;
+    }
+
     const { data: number, error: numError } = await supabase.rpc("next_invoice_number");
     if (numError || !number) {
       setMessage({ type: "error", text: "تعذّر توليد رقم الفاتورة: " + (numError?.message ?? "") });
@@ -248,8 +322,20 @@ export default function RequestFinance({
     });
 
     if (error) {
-      setMessage({ type: "error", text: "تعذّر إصدار الفاتورة: " + error.message });
+      setMessage({
+        type: "error",
+        text:
+          error.code === "23505"
+            ? "توجد فاتورة نشطة لهذه الخدمة بالفعل، ولم تُصدر فاتورة جديدة."
+            : "تعذّر إصدار الفاتورة: " + error.message,
+      });
+      loadAll();
       return;
+    }
+
+    // Issuing the first invoice means the service is confirmed by the customer.
+    if (ACTIVE_REQUEST_STATUSES.includes(request.status)) {
+      await supabase.from("service_requests").update({ status: "confirmed" }).eq("id", requestId);
     }
 
     setMessage({ type: "ok", text: "تم إصدار الفاتورة " + number + "." });
@@ -429,19 +515,163 @@ export default function RequestFinance({
     loadAll();
   }
 
-  async function markSupplierPaid(inv: SupplierInvoice) {
+  async function settleSupplierInvoice(event: FormEvent<HTMLFormElement>, inv: SupplierInvoice) {
+    event.preventDefault();
     setMessage(null);
-    const { error } = await supabase
-      .from("supplier_invoices")
-      .update({ status: "paid" })
-      .eq("id", inv.id);
 
-    if (error) {
-      setMessage({ type: "error", text: "تعذّر تحديث الحالة: " + error.message });
+    if (!settleDate) {
+      setMessage({ type: "error", text: "أدخل تاريخ السداد." });
       return;
     }
+
+    const { error } = await supabase
+      .from("supplier_invoices")
+      .update({ status: "paid", paid_at: settleDate, payment_method: settleMethod })
+      .eq("id", inv.id)
+      .eq("status", "pending");
+
+    if (error) {
+      setMessage({ type: "error", text: "تعذّر تسجيل السداد: " + error.message });
+      return;
+    }
+
+    setSettlingSupplierInvoiceId(null);
     setMessage({ type: "ok", text: "تم تسجيل سداد فاتورة المورد." });
     loadAll();
+  }
+
+  async function applyAdvanceToInvoice(advance: HeldAdvance) {
+    setMessage(null);
+
+    const invoice = invoices.find((inv) => inv.id === applyInvoiceId && inv.status === "issued");
+    if (!invoice) {
+      setMessage({ type: "error", text: "اختر فاتورة صادرة لتطبيق الدفعة المقدمة عليها." });
+      return;
+    }
+
+    const bal = balances[invoice.id];
+    const remainingDzd = bal ? Number(bal.balance_dzd) : Number(invoice.amount_dzd);
+    if (Number(advance.amount_dzd) > remainingDzd + 0.01) {
+      setMessage({ type: "error", text: "الدفعة المقدمة أكبر من المتبقي على هذه الفاتورة." });
+      return;
+    }
+
+    const { error } = await supabase
+      .from("client_advances")
+      .update({ status: "applied", linked_invoice_id: invoice.id })
+      .eq("id", advance.id)
+      .eq("status", "held");
+
+    if (error) {
+      setMessage({ type: "error", text: "تعذّر تطبيق الدفعة المقدمة: " + error.message });
+      return;
+    }
+
+    setApplyingAdvanceId(null);
+    setApplyInvoiceId("");
+    setMessage({ type: "ok", text: "تم تطبيق الدفعة المقدمة على الفاتورة وخُفض رصيدها." });
+    loadAll();
+  }
+
+  // ---------- Unapply / cancel ----------
+  async function unapplyAdvance(adv: HeldAdvance) {
+    setMessage(null);
+    const { error } = await supabase
+      .from("client_advances")
+      .update({ status: "held", linked_invoice_id: null })
+      .eq("id", adv.id)
+      .eq("status", "applied");
+
+    if (error) {
+      setMessage({ type: "error", text: "تعذّر فك تطبيق الدفعة: " + error.message });
+      return;
+    }
+    setMessage({ type: "ok", text: "تم فك تطبيق الدفعة المقدمة وعادت إلى الانتظار." });
+    loadAll();
+  }
+
+  function openCancel(target: CancelTarget) {
+    setCancelTarget(target);
+    setCancelReason("");
+    setMessage(null);
+  }
+
+  async function submitCancel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+    if (!cancelTarget) return;
+
+    const reason = cancelReason.trim();
+    if (!reason) {
+      setMessage({ type: "error", text: "اكتب سبب الإلغاء. يُحفظ السبب مع السجل." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    let error: { message: string } | null = null;
+
+    if (cancelTarget.kind === "invoice") {
+      const inv = invoices.find((i) => i.id === cancelTarget.id);
+      const bal = balances[cancelTarget.id];
+      const hasMoney =
+        Number(bal?.paid_dzd ?? 0) > 0 ||
+        heldAdvances.some((a) => a.linked_invoice_id === cancelTarget.id && a.status === "applied");
+      if (!inv || inv.status !== "issued") {
+        setMessage({ type: "error", text: "هذه الفاتورة لا يمكن إلغاؤها." });
+        return;
+      }
+      if (hasMoney) {
+        setMessage({ type: "error", text: "لا يمكن إلغاء فاتورة عليها دفعات. ألغِ الدفعات أو فك تطبيق الدفعات المقدمة أولاً." });
+        return;
+      }
+      ({ error } = await supabase
+        .from("invoices")
+        .update({ status: "cancelled", cancelled_at: now, cancel_reason: reason })
+        .eq("id", cancelTarget.id)
+        .eq("status", "issued"));
+    } else if (cancelTarget.kind === "payment") {
+      ({ error } = await supabase
+        .from("payments")
+        .update({ status: "cancelled", cancelled_at: now, cancel_reason: reason })
+        .eq("id", cancelTarget.id)
+        .eq("status", "confirmed"));
+    } else if (cancelTarget.kind === "advance") {
+      ({ error } = await supabase
+        .from("client_advances")
+        .update({ status: "cancelled", cancelled_at: now, cancel_reason: reason })
+        .eq("id", cancelTarget.id)
+        .eq("status", "held"));
+    } else {
+      ({ error } = await supabase
+        .from("supplier_invoices")
+        .update({ status: "cancelled", cancelled_at: now, cancel_reason: reason })
+        .eq("id", cancelTarget.id)
+        .eq("status", "pending"));
+    }
+
+    if (error) {
+      setMessage({ type: "error", text: "تعذّر الإلغاء: " + error.message });
+      return;
+    }
+
+    setCancelTarget(null);
+    setCancelReason("");
+    setMessage({ type: "ok", text: "تم الإلغاء وحُفظ السبب في السجل." });
+    loadAll();
+  }
+
+  function renderCancelForm(kind: CancelTarget["kind"], id: string) {
+    if (cancelTarget?.kind !== kind || cancelTarget.id !== id) return null;
+    return (
+      <form onSubmit={submitCancel} style={{ marginTop: "0.5rem" }}>
+        <label style={labelStyle}>
+          سبب الإلغاء
+          <input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} style={inputStyle} />
+        </label>
+        <button type="submit" style={buttonStyle}>تأكيد الإلغاء</button>
+        <button type="button" onClick={() => setCancelTarget(null)} style={buttonStyle}>تراجع</button>
+      </form>
+    );
   }
 
   // ---------- Render ----------
@@ -499,11 +729,31 @@ export default function RequestFinance({
               const stateLabel = bal ? PAYMENT_STATE_LABELS[bal.payment_state] ?? bal.payment_state : "—";
               return (
                 <li key={inv.id} style={{ borderBottom: "1px solid #ddd", padding: "0.5rem 0" }}>
-                  <div>{inv.invoice_number ?? "مسودة"} · {inv.status === "issued" ? "صادرة" : inv.status}</div>
+                  <div>{inv.invoice_number ?? "مسودة"} · {inv.status === "issued" ? "صادرة" : inv.status === "cancelled" ? "ملغاة" : inv.status}</div>
                   <div>
                     المبلغ: {formatDzd(inv.amount_dzd)} · المدفوع: {formatDzd(bal?.paid_dzd ?? 0)} · المتبقي: {formatDzd(bal?.balance_dzd ?? inv.amount_dzd)}
                   </div>
                   <div>الحالة: {stateLabel}</div>
+
+                  {payments
+                    .filter((p) => p.invoice_id === inv.id)
+                    .map((p) => (
+                      <div key={p.id} style={{ marginTop: "0.25rem" }}>
+                        دفعة: {formatDzd(p.amount_dzd)} · {p.paid_at.slice(0, 10)} · {PAYMENT_METHOD_LABELS[p.method] ?? p.method}
+                        {" "}
+                        <button onClick={() => openCancel({ kind: "payment", id: p.id })} style={buttonStyle}>إلغاء الدفعة</button>
+                        {renderCancelForm("payment", p.id)}
+                      </div>
+                    ))}
+
+                  {inv.status === "issued" &&
+                    Number(bal?.paid_dzd ?? 0) === 0 &&
+                    !heldAdvances.some((a) => a.linked_invoice_id === inv.id && a.status === "applied") && (
+                      <div>
+                        <button onClick={() => openCancel({ kind: "invoice", id: inv.id })} style={buttonStyle}>إلغاء الفاتورة</button>
+                        {renderCancelForm("invoice", inv.id)}
+                      </div>
+                    )}
 
                   {inv.status === "issued" && Number(bal?.balance_dzd ?? inv.amount_dzd) > 0 && (
                     <>
@@ -568,6 +818,62 @@ export default function RequestFinance({
             </label>
             <button type="submit" style={{ ...buttonStyle, width: "100%" }}>تسجيل الدفعة المقدمة</button>
           </form>
+
+          {heldAdvances.length > 0 && (
+            <>
+              <h3 style={{ marginTop: "1.5rem" }}>الدفعات المقدمة الحالية</h3>
+              <p style={{ color: "#666" }}>عند تطبيقها على فاتورة صادرة يُخفض رصيدها، ولا تتغير النقدية.</p>
+              <ul style={{ listStyle: "none", padding: 0 }}>
+                {heldAdvances.map((adv) => {
+                  const openInvoices = invoices.filter((inv) => inv.status === "issued");
+                  const linkedInvoice = invoices.find((inv) => inv.id === adv.linked_invoice_id);
+                  return (
+                    <li key={adv.id} style={{ borderBottom: "1px solid #ddd", padding: "0.5rem 0" }}>
+                      <div>
+                        {formatDzd(adv.amount_dzd)}
+                        {adv.currency !== "DZD" ? ` (${Number(adv.amount).toLocaleString("ar-DZ")} ${adv.currency})` : ""}
+                        {" · "}تاريخ الاستلام: {adv.date_received.slice(0, 10)}
+                      </div>
+
+                      {adv.status === "applied" ? (
+                        <>
+                          <div>مطبّقة على الفاتورة {linkedInvoice?.invoice_number ?? "—"}</div>
+                          <button onClick={() => unapplyAdvance(adv)} style={buttonStyle}>فك التطبيق</button>
+                        </>
+                      ) : (
+                        <>
+                          {openInvoices.length === 0 ? (
+                            <p style={{ color: "#666" }}>أصدر فاتورة أولاً لتطبيق هذه الدفعة عليها.</p>
+                          ) : applyingAdvanceId !== adv.id ? (
+                            <button onClick={() => { setApplyingAdvanceId(adv.id); setApplyInvoiceId(openInvoices[0].id); setMessage(null); }} style={buttonStyle}>
+                              تطبيق على فاتورة
+                            </button>
+                          ) : (
+                            <div style={{ marginTop: "0.5rem" }}>
+                              <label style={labelStyle}>
+                                الفاتورة
+                                <select value={applyInvoiceId} onChange={(e) => setApplyInvoiceId(e.target.value)} style={inputStyle}>
+                                  {openInvoices.map((inv) => (
+                                    <option key={inv.id} value={inv.id}>{inv.invoice_number}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <button onClick={() => applyAdvanceToInvoice(adv)} style={buttonStyle}>تأكيد التطبيق</button>
+                              <button onClick={() => setApplyingAdvanceId(null)} style={buttonStyle}>إلغاء</button>
+                            </div>
+                          )}
+                          <div>
+                            <button onClick={() => openCancel({ kind: "advance", id: adv.id })} style={buttonStyle}>إلغاء الدفعة المقدمة</button>
+                            {renderCancelForm("advance", adv.id)}
+                          </div>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
         </>
       )}
 
@@ -590,7 +896,36 @@ export default function RequestFinance({
                   {inv.due_date ? ` · الاستحقاق: ${inv.due_date}` : ""}
                 </div>
                 {inv.status === "pending" && (
-                  <button onClick={() => markSupplierPaid(inv)} style={buttonStyle}>تم السداد</button>
+                  <div>
+                    <button onClick={() => openCancel({ kind: "supplier", id: inv.id })} style={buttonStyle}>إلغاء الفاتورة</button>
+                    {renderCancelForm("supplier", inv.id)}
+                  </div>
+                )}
+                {inv.status === "cancelled" && <div style={{ color: "#666" }}>ملغاة</div>}
+                {inv.status === "paid" && inv.paid_at && (
+                  <div>تاريخ السداد: {inv.paid_at}{inv.payment_method ? ` · ${PAYMENT_METHOD_LABELS[inv.payment_method] ?? inv.payment_method}` : ""}</div>
+                )}
+                {inv.status === "pending" && settlingSupplierInvoiceId !== inv.id && (
+                  <button onClick={() => { setSettlingSupplierInvoiceId(inv.id); setSettleDate(todayString()); setSettleMethod("bank"); setMessage(null); }} style={buttonStyle}>تسجيل السداد</button>
+                )}
+                {inv.status === "pending" && settlingSupplierInvoiceId === inv.id && (
+                  <form onSubmit={(e) => settleSupplierInvoice(e, inv)} style={{ marginTop: "0.5rem" }}>
+                    <label style={labelStyle}>
+                      تاريخ السداد
+                      <input type="date" value={settleDate} onChange={(e) => setSettleDate(e.target.value)} style={inputStyle} />
+                    </label>
+                    <label style={labelStyle}>
+                      طريقة الدفع
+                      <select value={settleMethod} onChange={(e) => setSettleMethod(e.target.value)} style={inputStyle}>
+                        <option value="cash">نقداً</option>
+                        <option value="bank">تحويل بنكي</option>
+                        <option value="card">بطاقة</option>
+                        <option value="other">أخرى</option>
+                      </select>
+                    </label>
+                    <button type="submit" style={buttonStyle}>حفظ السداد</button>
+                    <button type="button" onClick={() => setSettlingSupplierInvoiceId(null)} style={buttonStyle}>إلغاء</button>
+                  </form>
                 )}
               </li>
             ))}
