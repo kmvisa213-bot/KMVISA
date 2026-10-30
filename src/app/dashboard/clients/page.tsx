@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Client = {
@@ -21,6 +22,7 @@ function normalizePhone(raw: string): string {
 }
 
 export default function ClientsPage() {
+  const router = useRouter();
   const [clients, setClients] = useState<Client[]>([]);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -136,6 +138,12 @@ export default function ClientsPage() {
             <strong>{client.full_name}</strong>
             <div>{client.phone}</div>
             {client.notes && <div>{client.notes}</div>}
+            <button
+              onClick={() => router.push(`/dashboard/clients/${client.id}`)}
+              style={{ marginTop: "0.5rem", padding: "0.4rem 0.8rem" }}
+            >
+              فتح الملف
+            </button>
           </li>
         ))}
       </ul>
