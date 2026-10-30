@@ -37,6 +37,9 @@ const GROUP_ORDER: CountryGroup[] = [
 
 // Generic messages only: never reveal which agencies or names exist.
 function errorMessage(raw: string): string {
+  if (raw.includes("credit_limit_exceeded")) {
+    return "تجاوز الرصيد المستحق لوكالتكم حد الائتمان المسموح. يرجى التواصل معنا لتسوية الرصيد أولاً.";
+  }
   if (raw.includes("invalid_agency_pair")) {
     return "تعذّر التحقق من بيانات الوكالة. تأكد من الاسم كما هو مسجّل لدينا.";
   }
