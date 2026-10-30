@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import RequestFinance from "@/components/request-finance";
 import {
   COUNTRIES,
   COUNTRY_GROUP_LABELS,
@@ -429,6 +430,8 @@ export default function RequestDetailPage() {
       </form>
 
       {message && <p>{message}</p>}
+
+      <RequestFinance requestId={requestId} />
     </main>
   );
 }
